@@ -1,0 +1,151 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color: #242820;
+  background-color: #F5F2E9;
+  font-family: 'Plus Jakarta Sans', Inter, system-ui, -apple-system, sans-serif;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background-color: #F5F2E9;
+  color: #242820;
+}
+
+* { box-sizing: border-box; }
+
+/* Eco-Intelligence Editorial Cards & Surfaces */
+.card {
+  border-radius: 1rem;
+  border: 1px solid #E8E3D7;
+  background-color: #FFFFFF;
+  box-shadow: 0 1px 3px rgba(36, 40, 32, 0.04), 0 6px 24px -4px rgba(36, 40, 32, 0.05);
+}
+
+.card-warm {
+  border-radius: 1rem;
+  border: 1px solid #DFD9CC;
+  background-color: #FAF8F3;
+  box-shadow: 0 1px 3px rgba(36, 40, 32, 0.04);
+}
+
+.card-hover {
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.card-hover:hover {
+  border-color: rgba(33, 76, 58, 0.35);
+  box-shadow: 0 10px 30px -4px rgba(36, 40, 32, 0.08);
+}
+
+/* Badges */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border-radius: 9999px;
+  padding: 0.25rem 0.65rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.75rem;
+  padding: 0.625rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: all 0.15s ease-in-out;
+}
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background-color: #214C3A;
+  color: #FFFFFF;
+}
+.btn-primary:hover:not(:disabled) {
+  background-color: #1A3C2E;
+}
+
+.btn-secondary {
+  background-color: #FAF8F3;
+  color: #242820;
+  border: 1px solid #D9D3C5;
+}
+.btn-secondary:hover:not(:disabled) {
+  background-color: #ECE7DA;
+  border-color: #CFC8B9;
+}
+
+.btn-sage {
+  background-color: #DDE8D8;
+  color: #214C3A;
+}
+.btn-sage:hover:not(:disabled) {
+  background-color: #CFE0CA;
+}
+
+/* Inputs & Form Fields - Universal Overlap Fix */
+.input {
+  width: 100%;
+  border-radius: 0.75rem;
+  border: 1px solid #D5CEBF;
+  background-color: #FFFFFF;
+  padding: 0.625rem 0.875rem;
+  font-size: 0.875rem;
+  color: #242820;
+  outline: none;
+  transition: all 0.15s ease-in-out;
+}
+.input::placeholder {
+  color: #77776C;
+  opacity: 0.9;
+}
+.input:focus {
+  border-color: #214C3A;
+  box-shadow: 0 0 0 3px rgba(221, 232, 216, 0.75);
+}
+
+.input-with-icon-left {
+  padding-left: 2.75rem !important;
+}
+
+.input-with-icon-right {
+  padding-right: 2.75rem !important;
+}
+
+.input-with-icons {
+  padding-left: 2.75rem !important;
+  padding-right: 2.75rem !important;
+}
+
+/* Form labeling and container */
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.form-label {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #77776C;
+}
+
+/* Editorial Heading Typography */
+.editorial-serif {
+  font-family: 'Newsreader', Georgia, serif;
+}
+
