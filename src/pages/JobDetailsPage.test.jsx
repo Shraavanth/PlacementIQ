@@ -27,7 +27,27 @@ beforeEach(() => {
       return { ok: true, json: async () => ({ message: 'Application submitted.' }) };
     }
     if (url === '/api/jobs/42/eligibility') {
-      return { ok: true, json: async () => ({ eligibility: { eligible: true } }) };
+      return {
+        ok: true,
+        json: async () => ({
+          eligibility: {
+            eligible: true,
+            status: 'eligible',
+            student_cgpa: 9.35,
+            required_cgpa: 7,
+            cgpa_status: 'met',
+            skill_match_percentage: 0,
+            matched_skills: [],
+            missing_skills: ['React'],
+            reasons: ['All mandatory criteria satisfied.'],
+            mandatory_breakdown: {
+              cgpa: { actual: 9.35, required: 7, status: 'met' },
+              department: { status: 'not_required' },
+              graduation_year: { status: 'not_required' }
+            }
+          }
+        })
+      };
     }
     if (url === '/api/jobs/42') {
       return { ok: true, json: async () => ({ job }) };
@@ -59,6 +79,9 @@ test('signs in and returns to the job before submitting the application', async 
   fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
 
   const applyButton = await screen.findByRole('button', { name: 'Apply now' });
+  expect(applyButton).toBeEnabled();
+  expect(screen.getByText(/0% match/)).toBeInTheDocument();
+  expect(screen.getByText(/skill gaps do not prevent you from applying/i)).toBeInTheDocument();
   fireEvent.click(applyButton);
 
   expect(await screen.findByRole('status')).toHaveTextContent('Application submitted.');

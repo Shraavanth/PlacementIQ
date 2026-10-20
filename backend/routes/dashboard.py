@@ -3,9 +3,14 @@ from flask import Blueprint, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 from backend.extensions import db
 from backend.models import Application, AuditLog, CareerRecommendation, Company, Job, Notification, StudentProfile, User
-from backend.utils import compute_eligibility, compute_match_score
+from backend.utils import compute_eligibility
 
 blueprint = Blueprint('dashboard', __name__, url_prefix='/api/dashboard')
+
+
+def registered_student_count():
+    return User.query.filter_by(role='student', status='active').count()
+
 
 @blueprint.route('/student', methods=['GET'])
 @jwt_required()
@@ -26,6 +31,7 @@ def student_dashboard():
     published_jobs = Job.query.filter_by(status='Published').all()
     jobs = []
     eligible_count = 0
+    skill_gap_count = 0
     now = datetime.utcnow()
     deadlines = []
 
@@ -36,13 +42,21 @@ def student_dashboard():
         })
         eligible = eligibility_result['eligible']
         eligible_count += int(eligible)
-        match_score = compute_match_score(student_data, {'required_skills': job.required_skills or [], 'title': job.title, 'location': job.location})
+        match_score = eligibility_result['score']
+        skill_gap_count += int(bool(eligibility_result['missing_skills']))
 
         if len(jobs) < 6:
             jobs.append({
                 'id': job.id, 'title': job.title, 'company_name': job.company.name if job.company else 'Company',
                 'location': job.location, 'required_skills': job.required_skills or [],
                 'match_score': match_score, 'eligible': eligible,
+                'eligibility_status': eligibility_result['status'],
+                'eligibility_reasons': eligibility_result['reasons'],
+                'student_cgpa': eligibility_result['student_cgpa'],
+                'required_cgpa': eligibility_result['required_cgpa'],
+                'skill_match_percentage': eligibility_result['skill_match_percentage'],
+                'matched_skills': eligibility_result['matched_skills'],
+                'missing_skills': eligibility_result['missing_skills'],
                 'reasons': eligibility_result['reasons'],
                 'deadline': job.deadline.isoformat() if job.deadline else None
             })
@@ -66,11 +80,6 @@ def student_dashboard():
     recommendations = [
         {'id': r.id, 'title': r.title, 'reason': r.reason, 'skills': r.skills or []} for r in CareerRecommendation.query.filter_by(user_id=user.id).limit(3)
     ]
-    if not recommendations:
-        recommendations = [
-            {'id': 1, 'title': 'Software Development', 'reason': 'Strong fit for Python, SQL and project-based development.', 'skills': ['Python', 'SQL', 'System Design']},
-            {'id': 2, 'title': 'Data Analytics', 'reason': 'Excellent match for analytical and reporting skills.', 'skills': ['SQL', 'Tableau', 'Excel']}
-        ]
     notifications = [{'id': n.id, 'title': n.title, 'message': n.message, 'kind': n.kind, 'link': n.link} for n in Notification.query.filter_by(user_id=user.id).order_by(Notification.created_at.desc()).limit(5)]
     applications = Application.query.filter_by(student_id=user.id).order_by(Application.created_at.desc()).all()
     profile_fields = ['first_name', 'last_name', 'phone', 'university', 'degree', 'department', 'graduation_year', 'cgpa', 'skills', 'projects']
@@ -93,7 +102,6 @@ def student_dashboard():
 
     # Missing profile information reminders
     if profile_completion < 80:
-        missing_keys = [f.replace('_', ' ').capitalize() for f in profile_fields if not getattr(profile, f)]
         deadlines.append({
             'id': 'profile-completion',
             'title': f'Complete your profile ({profile_completion}% done)',
@@ -107,7 +115,7 @@ def student_dashboard():
 
     overview = {
         'profileCompletion': profile_completion, 'eligibleJobs': eligible_count,
-        'skillGaps': sum(1 for job in jobs if not job['eligible']),
+        'skillGaps': skill_gap_count,
         'totalApplications': len(applications),
         'applied': sum(application.status == 'Applied' for application in applications),
         'shortlisted': sum(application.status == 'Shortlisted' for application in applications),
@@ -144,20 +152,39 @@ def recruiter_dashboard():
     if user.role != 'recruiter':
         return jsonify({'error': 'Only recruiters can access this dashboard.'}), 403
     jobs = Job.query.filter_by(recruiter_id=user.id).order_by(Job.created_at.desc()).limit(20).all()
-    application_count = Application.query.join(Job).filter(Job.recruiter_id == user.id).count()
+    recruiter_applications = Application.query.join(Job).filter(Job.recruiter_id == user.id)
+    application_count = recruiter_applications.count()
+    application_status_counts = {
+        status: recruiter_applications.filter(Application.status == status).count()
+        for status in ('Applied', 'Under Review', 'Shortlisted', 'Interview', 'Hired')
+    }
+    requisition_count = Job.query.filter_by(recruiter_id=user.id, status='Published').count()
     return jsonify({
         'jobs': [{
             'id': j.id,
             'title': j.title,
+            'description': j.description,
             'company_name': j.company.name if j.company else 'Company',
             'location': j.location,
+            'work_mode': j.work_mode,
+            'salary': j.salary,
             'required_skills': j.required_skills or [],
+            'eligible_departments': j.eligible_departments or [],
+            'graduation_year': j.graduation_year,
             'min_cgpa': j.min_cgpa,
             'status': j.status,
             'deadline': j.deadline.isoformat() if j.deadline else None,
-            'openings': j.openings
+            'openings': j.openings,
+            'application_count': Application.query.filter_by(job_id=j.id).count()
         } for j in jobs],
-        'statistics': {'published_jobs': sum(j.status == 'Published' for j in jobs), 'applications': application_count, 'eligible_candidates': 0}
+        'statistics': {
+            'published_jobs': requisition_count,
+            'applications': application_count,
+            'awaiting_review': application_status_counts['Applied'] + application_status_counts['Under Review'],
+            'shortlisted': application_status_counts['Shortlisted'],
+            'interviews': application_status_counts['Interview'],
+            'offers': application_status_counts['Hired']
+        }
     })
 
 @blueprint.route('/officer', methods=['GET'])
@@ -167,10 +194,9 @@ def officer_dashboard():
     user = User.query.get_or_404(user_id)
     if user.role != 'officer':
         return jsonify({'error': 'Only placement officers can access this dashboard.'}), 403
-    students = StudentProfile.query.count()
-    hired = Application.query.filter_by(status='Hired').count()
-    applications = Application.query.count()
-    placement_rate = round(hired * 100 / applications) if applications else 0
+    students = registered_student_count()
+    hired = db.session.query(db.func.count(db.func.distinct(Application.student_id))).filter_by(status='Hired').scalar() or 0
+    placement_rate = round(hired * 100 / students) if students else 0
     departments = [d[0] for d in db.session.query(StudentProfile.department).distinct().all() if d[0]]
     return jsonify({
         'statistics': {
@@ -187,6 +213,10 @@ def officer_dashboard():
 @blueprint.route('/intelligence', methods=['GET'])
 @jwt_required()
 def placement_intelligence():
+    user = User.query.get_or_404(int(get_jwt_identity()))
+    if user.role not in {'officer', 'admin'}:
+        return jsonify({'error': 'Placement analytics are restricted to authorized staff.'}), 403
+
     # Feature 5: Placement Intelligence & Skill-Demand Forecasting
     published_jobs = Job.query.filter_by(status='Published').all()
     total_jobs = len(published_jobs)
@@ -223,6 +253,10 @@ def placement_intelligence():
         {'stage': 'Final Placement / Offer', 'count': hired_count, 'conversion': f'{offer_rate}%'}
     ]
 
+    placed_student_ids = {
+        user_id for (user_id,) in db.session.query(Application.student_id).filter_by(status='Hired').distinct().all()
+    }
+
     # Department breakdown
     dept_stats = []
     student_profiles = StudentProfile.query.all()
@@ -234,7 +268,7 @@ def placement_intelligence():
                 found = {'department': prof.department, 'total_students': 0, 'placed_students': 0}
                 dept_stats.append(found)
             found['total_students'] += 1
-            if Application.query.filter_by(student_id=prof.user_id, status='Hired').count() > 0:
+            if prof.user_id in placed_student_ids:
                 found['placed_students'] += 1
 
     for d in dept_stats:
@@ -246,10 +280,13 @@ def placement_intelligence():
         for s in frequent_skills[:5]
     ]
 
-    is_sample_mode = total_jobs < 3
     return jsonify({
-        'sample_mode': is_sample_mode,
-        'dataset_size': {'jobs': total_jobs, 'applications': total_applications, 'students': len(student_profiles)},
+        'sample_mode': False,
+        'dataset_size': {
+            'jobs': total_jobs,
+            'applications': total_applications,
+            'students': registered_student_count()
+        },
         'frequent_skills': frequent_skills,
         'funnel': funnel,
         'department_trends': dept_stats,

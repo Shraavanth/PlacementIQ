@@ -28,6 +28,7 @@ export default function CareerGuidancePage() {
   // What-if simulator state
   const [simulatedSkills, setSimulatedSkills] = useState('');
   const [simulatedProject, setSimulatedProject] = useState(false);
+  const [simulatedPractice, setSimulatedPractice] = useState(false);
   const [simulatedCgpa, setSimulatedCgpa] = useState('');
   const [simulationResult, setSimulationResult] = useState(null);
   const [simulating, setSimulating] = useState(false);
@@ -56,16 +57,17 @@ export default function CareerGuidancePage() {
           fetch('/api/career/roadmap-tasks', { headers })
         ]);
 
-        if (guideRes.ok && active) {
-          const gData = await guideRes.json();
+        const failedResponse = [guideRes, twinRes, tasksRes].find((response) => !response.ok);
+        if (failedResponse) {
+          const failure = await failedResponse.json();
+          throw new Error(failure.error || 'Could not load career intelligence.');
+        }
+        const [gData, tData, taskData] = await Promise.all([
+          guideRes.json(), twinRes.json(), tasksRes.json()
+        ]);
+        if (active) {
           setRecommendations(gData.recommendations || []);
-        }
-        if (twinRes.ok && active) {
-          const tData = await twinRes.json();
-          setTwin(tData.twin);
-        }
-        if (tasksRes.ok && active) {
-          const taskData = await tasksRes.json();
+          setTwin(tData);
           setRoadmapTasks(taskData.tasks || []);
         }
       } catch (err) {
@@ -89,18 +91,22 @@ export default function CareerGuidancePage() {
           fetch(`/api/career/interview/questions?role=${encodeURIComponent(targetRole)}`, { headers }),
           fetch('/api/career/interview/history', { headers })
         ]);
-        if (qRes.ok && active) {
-          const qData = await qRes.json();
+        if (!qRes.ok || !hRes.ok) {
+          const failedResponse = !qRes.ok ? qRes : hRes;
+          const failure = await failedResponse.json();
+          throw new Error(failure.error || 'Could not load interview practice data.');
+        }
+        const [qData, hData] = await Promise.all([qRes.json(), hRes.json()]);
+        if (active) {
           setQuestions(qData.questions || []);
           if (qData.questions?.length > 0 && !selectedQuestion) {
             setSelectedQuestion(qData.questions[0]);
           }
-        }
-        if (hRes.ok && active) {
-          const hData = await hRes.json();
           setInterviewHistory(hData.history || []);
         }
-      } catch (_) {}
+      } catch (err) {
+        if (active) setError(err.message || 'Could not load interview practice data.');
+      }
     };
     fetchInterviewData();
     return () => { active = false; };
@@ -110,22 +116,24 @@ export default function CareerGuidancePage() {
   const runSimulation = async (e) => {
     e.preventDefault();
     setSimulating(true);
+    setError('');
     try {
       const skillsArray = simulatedSkills.split(',').map(s => s.trim()).filter(Boolean);
       const res = await fetch('/api/career/what-if', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
-          simulated_skills: skillsArray,
-          simulated_project: simulatedProject,
+          added_skills: skillsArray,
+          has_project: simulatedProject,
+          has_interview_practice: simulatedPractice,
           simulated_cgpa: simulatedCgpa ? Number(simulatedCgpa) : null
         })
       });
       const data = await res.json();
-      if (res.ok) {
-        setSimulationResult(data.simulation);
-      }
-    } catch (_) {
+      if (!res.ok) throw new Error(data.error || 'Could not run the readiness simulation.');
+      setSimulationResult(data);
+    } catch (err) {
+      setError(err.message || 'Could not run the readiness simulation.');
     } finally {
       setSimulating(false);
     }
@@ -138,11 +146,12 @@ export default function CareerGuidancePage() {
         method: 'PATCH',
         headers: { Authorization: `Bearer ${token}` }
       });
-      if (res.ok) {
-        const data = await res.json();
-        setRoadmapTasks(prev => prev.map(t => t.id === taskId ? { ...t, completed: data.completed } : t));
-      }
-    } catch (_) {}
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not update roadmap progress.');
+      setRoadmapTasks((previous) => previous.map((task) => task.id === taskId ? data.task : task));
+    } catch (err) {
+      setError(err.message || 'Could not update roadmap progress.');
+    }
   };
 
   // Submit Mock Interview Answer
@@ -150,6 +159,7 @@ export default function CareerGuidancePage() {
     e.preventDefault();
     if (!selectedQuestion || !answerText.trim()) return;
     setSubmittingInterview(true);
+    setError('');
     try {
       const res = await fetch('/api/career/interview/attempt', {
         method: 'POST',
@@ -162,6 +172,7 @@ export default function CareerGuidancePage() {
         })
       });
       const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not save the interview attempt.');
       if (res.ok) {
         setInterviewResult(data.attempt);
         // refresh history
@@ -173,7 +184,8 @@ export default function CareerGuidancePage() {
           setInterviewHistory(hData.history || []);
         }
       }
-    } catch (_) {
+    } catch (err) {
+      setError(err.message || 'Could not submit the interview answer.');
     } finally {
       setSubmittingInterview(false);
     }
@@ -248,7 +260,7 @@ export default function CareerGuidancePage() {
                         Placement Readiness Twin Status
                       </h2>
                       <p className="mt-1 text-xs text-muted-600">
-                        {twin.calculation_explanation}
+                        {twin.summary} {twin.methodology}
                       </p>
                     </div>
 
@@ -256,7 +268,7 @@ export default function CareerGuidancePage() {
                       <div>
                         <div className="text-xs uppercase tracking-wider text-muted-600 font-bold">Overall Score</div>
                         <div className="text-3xl sm:text-4xl font-serif font-bold text-forest-900">
-                          {twin.overall_score}<span className="text-sm font-sans font-normal text-muted-500">/100</span>
+                          {twin.composite_score}<span className="text-sm font-sans font-normal text-muted-500">/100</span>
                         </div>
                       </div>
                       <span className="badge badge-sage font-semibold capitalize text-xs">
@@ -265,40 +277,50 @@ export default function CareerGuidancePage() {
                     </div>
                   </div>
 
-                  <div className="mt-6 grid grid-cols-2 sm:grid-cols-4 gap-4">
-                    <div className="p-4 rounded-lg bg-warm-50/70 border border-[#E5DFD3]">
-                      <div className="text-xs uppercase tracking-wider text-muted-600 font-semibold mb-1">Academic</div>
-                      <div className="text-2xl font-serif font-bold text-forest-900">{twin.dimensions.academic}%</div>
-                      <p className="text-[11px] text-muted-500 mt-1">CGPA & Compliance</p>
-                    </div>
-                    <div className="p-4 rounded-lg bg-warm-50/70 border border-[#E5DFD3]">
-                      <div className="text-xs uppercase tracking-wider text-muted-600 font-semibold mb-1">Technical</div>
-                      <div className="text-2xl font-serif font-bold text-forest-900">{twin.dimensions.technical}%</div>
-                      <p className="text-[11px] text-muted-500 mt-1">Skills & Quizzes</p>
-                    </div>
-                    <div className="p-4 rounded-lg bg-warm-50/70 border border-[#E5DFD3]">
-                      <div className="text-xs uppercase tracking-wider text-muted-600 font-semibold mb-1">Experience</div>
-                      <div className="text-2xl font-serif font-bold text-forest-900">{twin.dimensions.experience}%</div>
-                      <p className="text-[11px] text-muted-500 mt-1">GitHub & Projects</p>
-                    </div>
-                    <div className="p-4 rounded-lg bg-warm-50/70 border border-[#E5DFD3]">
-                      <div className="text-xs uppercase tracking-wider text-muted-600 font-semibold mb-1">Practice</div>
-                      <div className="text-2xl font-serif font-bold text-forest-900">{twin.dimensions.practice}%</div>
-                      <p className="text-[11px] text-muted-500 mt-1">Mock Interviews</p>
-                    </div>
+                  <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+                    {twin.dimensions.map((dimension) => (
+                      <div key={dimension.name} className="p-4 rounded-lg bg-warm-50/70 border border-[#E5DFD3]">
+                        <div className="flex justify-between gap-2 text-xs uppercase tracking-wider text-muted-600 font-semibold mb-1">
+                          <span>{dimension.name}</span><span>{dimension.weight}</span>
+                        </div>
+                        <div className="text-2xl font-serif font-bold text-forest-900">{dimension.score}%</div>
+                        <ul className="mt-2 space-y-1 text-[11px] text-muted-600">
+                          {dimension.factors.map((factor) => <li key={factor}>{factor}</li>)}
+                        </ul>
+                      </div>
+                    ))}
                   </div>
 
-                  {twin.skill_gaps && twin.skill_gaps.length > 0 && (
-                    <div className="mt-6 p-4 rounded-lg bg-amber-50/80 border border-amber-200">
-                      <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-amber-900 mb-1">
-                        <AlertCircle className="w-4 h-4" />
-                        Identified Skill Gaps for Target Positions
-                      </div>
-                      <p className="text-xs text-amber-800">
-                        {twin.skill_gaps.join(', ')}
-                      </p>
-                    </div>
+                  {twin.missing_profile_fields?.length > 0 && (
+                    <p className="mt-5 rounded-lg border border-amber-200 bg-amber-50/80 p-3 text-xs text-amber-900">
+                      Complete these profile fields for a more complete assessment: {twin.missing_profile_fields.map((field) => field.replaceAll('_', ' ')).join(', ')}.
+                    </p>
                   )}
+
+                  <div className="mt-6">
+                    <h3 className="font-serif font-bold text-sm text-charcoal-900 mb-3">Published-job eligibility and skill match</h3>
+                    <div className="space-y-2">
+                      {twin.job_analyses.map((job) => (
+                        <div key={job.job_id} className="rounded-lg border border-[#DFD9CC] bg-white p-3 text-xs">
+                          <div className="flex flex-wrap justify-between gap-2">
+                            <strong>{job.title} · {job.company_name}</strong>
+                            <span className={job.eligible ? 'font-semibold text-forest-800' : job.eligibility_status === 'profile_required' ? 'font-semibold text-amber-800' : 'font-semibold text-ruby-700'}>
+                              {job.eligible ? 'Eligible to apply' : job.eligibility_status === 'profile_required' ? 'Profile information required' : 'Not eligible'} · {job.skill_match_percentage}% skills match
+                            </span>
+                          </div>
+                          {!job.eligible && <p className="mt-1 text-muted-600">Mandatory eligibility: {job.eligibility_reasons.join(' ')}</p>}
+                          {job.missing_skills?.length > 0 && <p className="mt-1 text-muted-600">Skill gaps to develop: {job.missing_skills.join(', ')}. These do not block applications.</p>}
+                          {job.missing_skills.length > 0 && <p className="mt-1 text-amber-800">Skill gaps: {job.missing_skills.join(', ')}</p>}
+                        </div>
+                      ))}
+                      {twin.job_analyses.length === 0 && <p className="text-xs text-muted-600">No published job requirements are currently available to compare.</p>}
+                    </div>
+                  </div>
+                  <div className="mt-5 flex flex-wrap gap-2 text-xs">
+                    {Object.entries(twin.application_outcomes || {}).map(([status, count]) => (
+                      <span key={status} className="badge badge-sage">{status}: {count}</span>
+                    ))}
+                  </div>
                 </div>
               )}
 
@@ -351,6 +373,15 @@ export default function CareerGuidancePage() {
                       />
                       Add Project / Repo
                     </label>
+                    <label className="flex items-center gap-2 text-xs font-medium text-charcoal-800 cursor-pointer mb-2">
+                      <input
+                        type="checkbox"
+                        checked={simulatedPractice}
+                        onChange={(e) => setSimulatedPractice(e.target.checked)}
+                        className="rounded border-[#DFD9CC] text-forest-800 focus:ring-forest-700"
+                      />
+                      Add interview practice
+                    </label>
 
                     <button
                       type="submit"
@@ -386,7 +417,7 @@ export default function CareerGuidancePage() {
                           <div className="text-2xl font-serif font-bold text-forest-900">{simulationResult.simulated_score}</div>
                         </div>
                         <span className="badge badge-forest text-xs font-bold">
-                          +{simulationResult.delta_points} pts
+                          {simulationResult.delta_points > 0 ? '+' : ''}{simulationResult.delta_points} pts
                         </span>
                       </div>
                     </div>

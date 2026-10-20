@@ -96,7 +96,10 @@ export default function JobDetailsPage() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Could not submit your application.');
       setMessage(data.message || 'Application submitted successfully.');
-      setExistingApplication({ id: data.application_id, status: 'applied' });
+      setExistingApplication({
+        id: data.application?.id,
+        status: data.application?.status || 'Applied'
+      });
       // Refresh eligibility and application state
       loadEligibilityAndApp(true);
     } catch (err) {
@@ -107,7 +110,6 @@ export default function JobDetailsPage() {
   };
 
   const isApplied = Boolean(existingApplication);
-  const isEligible = eligibility?.eligible !== false;
   const isDeadlinePassed = job?.deadline && new Date(job.deadline) < new Date();
 
   return (
@@ -132,9 +134,9 @@ export default function JobDetailsPage() {
               <div>
                 <div className="flex items-center gap-2 mb-2">
                   <span className="badge badge-sage">Requisition #{job.id}</span>
-                  {job.department && (
+                  {job.eligible_departments?.length > 0 && (
                     <span className="text-xs uppercase tracking-wider text-muted-500 font-semibold">
-                      {job.department}
+                      {job.eligible_departments.join(', ')}
                     </span>
                   )}
                   {isApplied && (
@@ -166,12 +168,13 @@ export default function JobDetailsPage() {
               </div>
 
               {/* Quick action card */}
-              <div className="flex flex-col sm:items-end gap-3 pt-2">
+              {(!token || role === 'student') && (
+                <div className="flex flex-col sm:items-end gap-3 pt-2">
                 <button
                   type="button"
                   className="btn btn-primary px-8 py-3 text-base shadow-soft disabled:opacity-60"
                   onClick={apply}
-                  disabled={applying || isApplied || (Boolean(token) && role === 'student' && !isEligible) || isDeadlinePassed}
+                  disabled={applying || isApplied || (Boolean(token) && role === 'student' && eligibility?.eligible === false) || isDeadlinePassed}
                 >
                   {applying ? 'Submitting...' : isApplied ? `Application ${existingApplication.status}` : 'Apply now'}
                 </button>
@@ -184,9 +187,10 @@ export default function JobDetailsPage() {
                   <div className="text-xs bg-amber-50 border border-amber-200 text-amber-900 px-3 py-2 rounded-lg font-medium">
                     📅 Interview scheduled: {new Date(existingApplication.interview_date).toLocaleString()}
                   </div>
+                  )}
+                </div>
                 )}
               </div>
-            </div>
 
             {/* Role Overview */}
             <div className="mt-8">
@@ -196,19 +200,19 @@ export default function JobDetailsPage() {
               </div>
             </div>
 
-            {/* Feature 2: Explainable Job Matching & Eligibility Breakdown */}
+            {/* Eligibility and skill-match analysis are independent evaluations. */}
             <div className="mt-10 pt-8 border-t border-[#ECE6D9]">
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2">
                   <Sparkles className="w-5 h-5 text-forest-700" />
                   <h3 className="font-serif text-xl font-bold text-charcoal-900">
-                    Explainable Eligibility & Skill Diagnosis
+                  Eligibility & Skill Match
                   </h3>
                 </div>
-                {eligibility && (
-                  <span className={`badge ${eligibility.eligible ? 'badge-forest' : 'badge-amber'}`}>
-                    {eligibility.eligible ? 'All Mandatory Criteria Met' : 'Action Required for Eligibility'}
-                  </span>
+              {eligibility && role === 'student' && (
+                <span className={`badge ${eligibility.status === 'eligible' ? 'bg-sage-100 text-forest-900' : eligibility.status === 'profile_required' ? 'bg-amber-100 text-amber-800' : 'bg-ruby-100 text-ruby-700'}`}>
+                  {eligibility.status === 'eligible' ? 'Eligible to Apply' : eligibility.status === 'profile_required' ? 'Profile Information Required' : 'Not Eligible'}
+                </span>
                 )}
               </div>
 
@@ -222,33 +226,39 @@ export default function JobDetailsPage() {
                     <li className="flex items-center justify-between">
                       <span className="flex items-center gap-2">
                         <GraduationCap className="w-4 h-4 text-muted-500" />
-                        Minimum CGPA: {job.min_cgpa ?? 'None required'}
+                        CGPA: {eligibility?.student_cgpa ?? (role === 'student' ? 'Add a valid CGPA' : 'Sign in as a student to check')}
+                        {' '}· Required: {job.min_cgpa ?? 0}
                       </span>
-                      {eligibility?.mandatory_breakdown && (
-                        eligibility.mandatory_breakdown.cgpa_met 
-                          ? <span className="flex items-center gap-1 text-xs text-forest-700 font-semibold"><CheckCircle2 className="w-4 h-4" /> Met</span>
-                          : <span className="flex items-center gap-1 text-xs text-ruby-600 font-semibold"><XCircle className="w-4 h-4" /> Below cutoff</span>
+                      {eligibility?.mandatory_breakdown?.cgpa?.status && (
+                        <span className={`flex items-center gap-1 text-xs font-semibold ${eligibility.cgpa_status === 'met' ? 'text-forest-700' : eligibility.cgpa_status === 'missing' ? 'text-amber-800' : 'text-ruby-700'}`}>
+                          {eligibility.cgpa_status === 'met' ? <CheckCircle2 className="w-4 h-4" /> : eligibility.cgpa_status === 'missing' ? <AlertTriangle className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
+                          {eligibility.cgpa_status === 'met' ? 'Passed' : eligibility.cgpa_status === 'missing' ? 'Required' : 'Below cutoff'}
+                        </span>
                       )}
                     </li>
 
-                    {job.department && (
+                    {job.eligible_departments?.length > 0 && (
                       <li className="flex items-center justify-between">
-                        <span>Target Department: {job.department}</span>
-                        {eligibility?.mandatory_breakdown && (
-                          eligibility.mandatory_breakdown.department_met 
+                        <span>Target Departments: {job.eligible_departments.join(', ')}</span>
+                        {eligibility?.mandatory_breakdown?.department && (
+                          eligibility.mandatory_breakdown.department.status === 'met'
                             ? <span className="flex items-center gap-1 text-xs text-forest-700 font-semibold"><CheckCircle2 className="w-4 h-4" /> Met</span>
-                            : <span className="flex items-center gap-1 text-xs text-ruby-600 font-semibold"><XCircle className="w-4 h-4" /> Different branch</span>
+                            : eligibility.mandatory_breakdown.department.status === 'missing'
+                              ? <span className="flex items-center gap-1 text-xs text-amber-800 font-semibold"><AlertTriangle className="w-4 h-4" /> Add department</span>
+                              : <span className="flex items-center gap-1 text-xs text-ruby-600 font-semibold"><XCircle className="w-4 h-4" /> Different branch</span>
                         )}
                       </li>
                     )}
 
-                    {job.grad_year && (
+                    {job.graduation_year && (
                       <li className="flex items-center justify-between">
-                        <span>Graduation Year: {job.grad_year}</span>
-                        {eligibility?.mandatory_breakdown && (
-                          eligibility.mandatory_breakdown.grad_year_met 
+                        <span>Graduation Year: {job.graduation_year}</span>
+                        {eligibility?.mandatory_breakdown?.graduation_year && (
+                          eligibility.mandatory_breakdown.graduation_year.status === 'met'
                             ? <span className="flex items-center gap-1 text-xs text-forest-700 font-semibold"><CheckCircle2 className="w-4 h-4" /> Met</span>
-                            : <span className="flex items-center gap-1 text-xs text-ruby-600 font-semibold"><XCircle className="w-4 h-4" /> Year mismatch</span>
+                            : eligibility.mandatory_breakdown.graduation_year.status === 'missing'
+                              ? <span className="flex items-center gap-1 text-xs text-amber-800 font-semibold"><AlertTriangle className="w-4 h-4" /> Add year</span>
+                              : <span className="flex items-center gap-1 text-xs text-ruby-600 font-semibold"><XCircle className="w-4 h-4" /> Year mismatch</span>
                         )}
                       </li>
                     )}
@@ -257,8 +267,10 @@ export default function JobDetailsPage() {
                   {/* Overall reasons */}
                   {eligibility && (
                     <div className="mt-4 pt-3 border-t border-[#DFD9CC]">
-                      <p className={`text-xs sm:text-sm font-medium ${eligibility.eligible ? 'text-forest-800' : 'text-ruby-700'}`}>
-                        {eligibility.eligible ? '✓ You satisfy all strict institutional placement requirements.' : eligibility.reasons?.join(' ')}
+                      <p className={`text-xs sm:text-sm font-medium ${eligibility.eligible ? 'text-forest-800' : eligibility.status === 'profile_required' ? 'text-amber-800' : 'text-ruby-700'}`}>
+                        {eligibility.eligible
+                          ? `✓ CGPA requirement passed (${eligibility.student_cgpa} / ${eligibility.required_cgpa}); mandatory requirements are satisfied.`
+                          : eligibility.reasons?.join(' ')}
                       </p>
                     </div>
                   )}
@@ -267,9 +279,21 @@ export default function JobDetailsPage() {
                 {/* Skills Analysis */}
                 <div className="p-5 rounded-xl bg-warm-50 border border-[#E5DFD3]">
                   <h4 className="text-sm font-bold uppercase tracking-wider text-forest-900 mb-3">
-                    Technical & Domain Competencies
+                    Skill Match
                   </h4>
 
+                  <p className="mb-3 text-sm font-semibold text-charcoal-800">
+                    {eligibility && role === 'student' ? (
+                      <>
+                        {eligibility.skill_match_percentage}% match
+                        <span className="ml-2 text-xs font-normal text-muted-600">
+                          ({eligibility.matched_skills?.length || 0} matched of {job.required_skills?.length || 0} required)
+                        </span>
+                      </>
+                    ) : (
+                      <span className="text-xs font-normal text-muted-600">Sign in as a student to view your skill match.</span>
+                    )}
+                  </p>
                   <div className="mb-4">
                     <p className="text-xs text-muted-600 font-semibold uppercase mb-1.5">Required Skills</p>
                     <div className="flex flex-wrap gap-1.5">
@@ -301,12 +325,18 @@ export default function JobDetailsPage() {
                     <div className="mt-3 p-3 rounded-lg bg-amber-50 border border-amber-200">
                       <p className="text-xs font-semibold text-amber-900 flex items-center gap-1 mb-1">
                         <AlertTriangle className="w-3.5 h-3.5" />
-                        Skills to acquire for optimal fit:
+                        Recommended skills to build (not application requirements):
                       </p>
                       <p className="text-xs text-amber-800">
                         {eligibility.missing_skills.join(', ')}
                       </p>
                     </div>
+                  )}
+
+                  {eligibility?.missing_skills?.length > 0 && (
+                    <p className="mt-3 text-[11px] text-muted-600">
+                      Your skill gaps do not prevent you from applying when mandatory eligibility is met.
+                    </p>
                   )}
 
                   {eligibility?.score_basis && (

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { 
   Building2, 
   Briefcase, 
@@ -168,8 +169,8 @@ export default function RecruiterDashboard() {
       </div>
 
       <section aria-label="Recruiter capabilities" className="mb-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <a href="#requisition-form" className="card card-hover p-4 bg-white border border-[#DFD9CC]">
-          <h3 className="font-serif font-bold text-charcoal-900">Create requisitions</h3>
+        <a href="/recruiter/jobs" className="card card-hover p-4 bg-white border border-[#DFD9CC]">
+          <h3 className="font-serif font-bold text-charcoal-900">Manage requisitions</h3>
           <p className="mt-1 text-xs leading-relaxed text-muted-600">Set role details, required skills, eligibility rules, openings, and application deadlines.</p>
         </a>
         <a href="#applicant-pipeline" className="card card-hover p-4 bg-white border border-[#DFD9CC]">
@@ -221,8 +222,8 @@ export default function RecruiterDashboard() {
         <div className="card p-5 bg-white border border-[#DFD9CC] shadow-soft">
           <div className="flex justify-between items-center">
             <div>
-              <p className="text-xs uppercase tracking-wider text-muted-600 font-bold">Screened Pipeline</p>
-              <p className="mt-2 text-3xl font-serif font-bold text-charcoal-900">{statistics.eligible_candidates || 0}</p>
+              <p className="text-xs uppercase tracking-wider text-muted-600 font-bold">Awaiting Review</p>
+              <p className="mt-2 text-3xl font-serif font-bold text-charcoal-900">{statistics.awaiting_review || 0}</p>
             </div>
             <div className="h-10 w-10 rounded-xl bg-sage-100 text-forest-900 flex items-center justify-center">
               <CheckCircle2 className="w-5 h-5" />
@@ -231,13 +232,23 @@ export default function RecruiterDashboard() {
         </div>
       </div>
 
-      <div className="mt-8 grid gap-8 lg:grid-cols-12">
-        {/* Post a Job Form */}
+      <section className="mt-8 card p-5 bg-white border border-[#DFD9CC] shadow-soft flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h3 className="font-serif font-bold text-lg text-charcoal-900">Manage your requisitions</h3>
+          <p className="mt-1 text-xs text-muted-600">Create, edit, publish, close, or archive postings in Job Posting.</p>
+        </div>
+        <Link to="/recruiter/jobs" className="btn btn-primary text-xs px-5 py-2.5">
+          Open Job Posting
+        </Link>
+      </section>
+
+      <div className="mt-8 grid gap-8">
+        {false && (
         <div className="lg:col-span-6">
           <form id="requisition-form" className="card p-6 bg-white border border-[#DFD9CC] shadow-soft space-y-4" onSubmit={submit}>
             <div className="flex items-center gap-2 pb-3 border-b border-[#ECE6D9]">
               <PlusCircle className="w-5 h-5 text-forest-800" />
-              <h3 className="text-lg font-serif font-bold text-charcoal-900">Publish New Requisition</h3>
+              <h3 className="text-lg font-serif font-bold text-charcoal-900">Requisition Details</h3>
             </div>
 
             <div>
@@ -380,9 +391,10 @@ export default function RecruiterDashboard() {
             </button>
           </form>
         </div>
+        )}
 
         {/* Requisitions List */}
-        <div className="lg:col-span-6 space-y-4">
+        <div className="space-y-4">
           <section className="card p-6 bg-white border border-[#DFD9CC] shadow-soft">
             <div className="flex items-center justify-between pb-3 border-b border-[#ECE6D9] mb-4">
               <h3 className="text-lg font-serif font-bold text-charcoal-900">Your Active Postings</h3>

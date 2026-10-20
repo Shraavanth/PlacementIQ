@@ -18,8 +18,8 @@ def register():
         return jsonify({'error': 'Valid email is required.'}), 400
     if len(password) < 8:
         return jsonify({'error': 'Password must be at least 8 characters long.'}), 400
-    if role not in {'student', 'recruiter', 'officer', 'admin'}:
-        return jsonify({'error': 'Unsupported role.'}), 400
+    if role not in {'student', 'recruiter'}:
+        return jsonify({'error': 'Placement officer and administrator accounts must be provisioned by an authorized administrator.'}), 403
     if User.query.filter_by(email=email).first():
         return jsonify({'error': 'A user with this email already exists.'}), 409
 

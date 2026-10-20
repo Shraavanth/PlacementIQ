@@ -24,7 +24,9 @@ export default function JobsPage() {
 
   useEffect(() => {
     let active = true;
-    fetch('/api/jobs')
+    fetch('/api/jobs', {
+      headers: token ? { Authorization: `Bearer ${token}` } : {}
+    })
       .then(async (res) => {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Could not load jobs.');
@@ -34,11 +36,11 @@ export default function JobsPage() {
         if (active) setError(err.message || 'Could not load jobs.');
       });
     return () => { active = false; };
-  }, []);
+  }, [token]);
 
   const departments = useMemo(() => {
     const set = new Set();
-    jobs.forEach(j => { if (j.department) set.add(j.department); });
+    jobs.forEach((job) => (job.eligible_departments || []).forEach((department) => set.add(department)));
     return Array.from(set);
   }, [jobs]);
 
@@ -49,7 +51,7 @@ export default function JobsPage() {
         job.company_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
         job.required_skills?.some(s => s.toLowerCase().includes(searchTerm.toLowerCase()));
       
-      const matchesDept = selectedDept === 'all' || job.department === selectedDept;
+      const matchesDept = selectedDept === 'all' || (job.eligible_departments || []).includes(selectedDept);
 
       return matchesSearch && matchesDept;
     });
@@ -101,19 +103,22 @@ export default function JobsPage() {
               />
             </div>
 
-            <div className="md:col-span-4 flex items-center gap-2">
-              <Filter className="w-4 h-4 text-muted-500" />
-              <select
-                value={selectedDept}
-                onChange={(e) => setSelectedDept(e.target.value)}
-                className="input text-sm w-full bg-warm-50/50 border-[#DFD9CC]"
-              >
-                <option value="all">All Departments</option>
-                {departments.map(d => (
-                  <option key={d} value={d}>{d}</option>
-                ))}
-              </select>
-            </div>
+            {role !== 'officer' && (
+              <div className="md:col-span-4 flex items-center gap-2">
+                <Filter className="w-4 h-4 text-muted-500" />
+                <select
+                  aria-label="Filter by department"
+                  value={selectedDept}
+                  onChange={(e) => setSelectedDept(e.target.value)}
+                  className="input text-sm w-full bg-warm-50/50 border-[#DFD9CC]"
+                >
+                  <option value="all">All Departments</option>
+                  {departments.map(d => (
+                    <option key={d} value={d}>{d}</option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
         </div>
 
@@ -148,12 +153,12 @@ export default function JobsPage() {
                   <div className="flex-1">
                     <div className="flex flex-wrap items-center gap-2 mb-2">
                       <span className="badge badge-sage text-xs">Requisition #{job.id}</span>
-                      {job.department && (
+                      {job.eligible_departments?.length > 0 && (
                         <span className="text-xs uppercase tracking-wider text-muted-500 font-semibold">
-                          {job.department}
+                          {job.eligible_departments.join(', ')}
                         </span>
                       )}
-                      {job.min_cgpa && (
+                      {job.min_cgpa != null && (
                         <span className="text-xs text-charcoal-700 font-medium flex items-center gap-1">
                           <GraduationCap className="w-3.5 h-3.5 text-forest-700" />
                           Min CGPA: {job.min_cgpa}
@@ -192,6 +197,30 @@ export default function JobsPage() {
                             {skill}
                           </span>
                         ))}
+                      </div>
+                    )}
+
+                    {role === 'student' && job.eligibility && (
+                      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                        <div className="rounded-lg border border-[#DFD9CC] bg-warm-50 p-3">
+                          <p className="text-[10px] font-bold uppercase tracking-wider text-forest-900">Eligibility</p>
+                          <p className={`mt-1 text-xs font-semibold ${job.eligibility.eligible ? 'text-forest-800' : job.eligibility.status === 'profile_required' ? 'text-amber-800' : 'text-ruby-700'}`}>
+                            {job.eligibility.eligible ? 'Eligible to apply' : job.eligibility.status === 'profile_required' ? 'Profile information required' : 'Not eligible'}
+                          </p>
+                          <p className="mt-1 text-[11px] text-muted-600">
+                            Your CGPA: {job.eligibility.student_cgpa ?? 'Add a valid CGPA'} · Required: {job.eligibility.required_cgpa}
+                          </p>
+                          {!job.eligibility.eligible && (
+                            <p className="mt-1 text-[11px] text-muted-600">{job.eligibility.reasons?.join(' ')}</p>
+                          )}
+                        </div>
+                        <div className="rounded-lg border border-[#DFD9CC] bg-white p-3">
+                          <p className="text-[10px] font-bold uppercase tracking-wider text-forest-900">Skill Match</p>
+                          <p className="mt-1 text-xs font-semibold text-charcoal-800">
+                            {job.eligibility.skill_match_percentage}% · Missing: {job.eligibility.missing_skills?.join(', ') || 'None'}
+                          </p>
+                          <p className="mt-1 text-[11px] text-muted-600">Skill gaps are recommendations and do not block applications.</p>
+                        </div>
                       </div>
                     )}
                   </div>

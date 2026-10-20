@@ -3,7 +3,7 @@ import io
 
 import pytest
 import fitz
-from backend.utils import extract_skills_from_text
+from backend.utils import compute_eligibility, extract_skills_from_text
 from backend.app import create_app
 from backend.extensions import db
 from backend.config import TestingConfig
@@ -84,11 +84,147 @@ def test_eligibility_engine_marks_student_eligible(client):
     recruiter_reg = client.post('/api/auth/register', json={'firstName': 'R', 'lastName': 'N', 'email': 'recruiter2@example.com', 'password': 'Password123', 'role': 'recruiter'})
     assert recruiter_reg.status_code == 201
     recruiter_token = client.post('/api/auth/login', json={'email': 'recruiter2@example.com', 'password': 'Password123'}).get_json()['token']
-    job = client.post('/api/jobs', json={'title': 'Backend Engineer', 'description': 'Build APIs', 'required_skills': ['Python', 'SQL'], 'min_cgpa': 8.0, 'eligible_departments': ['CSE', 'IT'], 'deadline': '2027-01-01', 'status': 'Published'}, headers={'Authorization': f'Bearer {recruiter_token}'})
+    job = client.post('/api/jobs', json={'title': 'Backend Engineer', 'description': 'Build APIs', 'company_name': 'Recruiter Two', 'required_skills': ['Python', 'SQL'], 'min_cgpa': 8.0, 'eligible_departments': ['CSE', 'IT'], 'deadline': '2027-01-01', 'status': 'Published'}, headers={'Authorization': f'Bearer {recruiter_token}'})
     job_id = job.get_json()['job']['id']
     result = client.get(f'/api/jobs/{job_id}/eligibility', headers={'Authorization': f'Bearer {token}'})
     assert result.status_code == 200
     assert result.get_json()['eligibility']['eligible'] is True
+
+
+@pytest.mark.parametrize(('student_cgpa', 'minimum_cgpa', 'expected'), [
+    (9.35, 7.0, True),
+    (8.50, 8.00, True),
+    (7.00, 7.00, True),
+    (6.90, 7.00, False),
+    (9.35, 9.50, False),
+])
+def test_cgpa_eligibility_uses_numeric_values_and_inclusive_cutoff(student_cgpa, minimum_cgpa, expected):
+    result = compute_eligibility(
+        {'cgpa': student_cgpa, 'skills': []},
+        {'min_cgpa': minimum_cgpa, 'required_skills': ['Python']}
+    )
+    assert result['eligible'] is expected
+    assert result['status'] == ('eligible' if expected else 'ineligible')
+    assert result['missing_skills'] == ['Python']
+    assert result['skill_match_percentage'] == 0
+
+
+@pytest.mark.parametrize('cgpa', [None, '', 'unknown', 10.1, float('nan'), True])
+def test_missing_or_invalid_cgpa_requires_profile_correction(cgpa):
+    result = compute_eligibility({'cgpa': cgpa}, {'min_cgpa': 7.0})
+    assert result['eligible'] is False
+    assert result['status'] == 'profile_required'
+    assert result['cgpa_status'] == 'missing'
+    assert 'cgpa' in result['missing_data']
+    assert 'below' not in result['reasons'][0].lower()
+
+
+def test_eligible_student_with_skill_gaps_can_apply_and_backend_rechecks_cgpa(client):
+    student = client.post('/api/auth/register', json={
+        'firstName': 'Eligible', 'lastName': 'Candidate',
+        'email': 'eligible-candidate@example.com', 'password': 'Password123', 'role': 'student'
+    })
+    assert student.status_code == 201
+    student_token = client.post('/api/auth/login', json={
+        'email': 'eligible-candidate@example.com', 'password': 'Password123'
+    }).get_json()['token']
+    student_auth = {'Authorization': f'Bearer {student_token}'}
+    profile = client.put('/api/student/profile', json={
+        'cgpa': '9.35', 'department': 'CSE', 'graduation_year': 2026, 'skills': ['Python', 'SQL']
+    }, headers=student_auth)
+    assert profile.status_code == 200
+    assert profile.get_json()['profile']['cgpa'] == 9.35
+
+    recruiter_token = client.post('/api/auth/login', json={
+        'email': 'recruiter@demo.com', 'password': 'Recruiter@123'
+    }).get_json()['token']
+    job_response = client.post('/api/jobs', json={
+        'title': 'Data Platform Engineer', 'description': 'Build data services.',
+        'required_skills': ['Python', 'SQL', 'Java'], 'min_cgpa': '7.0',
+        'eligible_departments': ['CSE']
+    }, headers={'Authorization': f'Bearer {recruiter_token}'})
+    assert job_response.status_code == 201
+    job_id = job_response.get_json()['job']['id']
+
+    listed = client.get('/api/jobs', headers=student_auth).get_json()['jobs']
+    listed_job = next(job for job in listed if job['id'] == job_id)
+    eligibility_response = client.get(f'/api/jobs/{job_id}/eligibility', headers=student_auth).get_json()['eligibility']
+    assert listed_job['eligibility']['eligible'] is True
+    assert eligibility_response['eligible'] is True
+    assert eligibility_response['student_cgpa'] == 9.35
+    assert eligibility_response['required_cgpa'] == 7.0
+    assert eligibility_response['matched_skills'] == ['Python', 'SQL']
+    assert eligibility_response['missing_skills'] == ['Java']
+    assert eligibility_response['skill_match_percentage'] < 100
+
+    application = client.post('/api/applications', json={'job_id': job_id}, headers=student_auth)
+    assert application.status_code == 200
+    assert application.get_json()['application']['status'] == 'Applied'
+    assert client.post('/api/applications', json={'job_id': job_id}, headers=student_auth).status_code == 409
+
+    client.put('/api/student/profile', json={'cgpa': 6.9}, headers=student_auth)
+    rejected = client.post('/api/applications', json={'job_id': job_id}, headers=student_auth)
+    assert rejected.status_code == 400
+    assert rejected.get_json()['eligibility']['status'] == 'ineligible'
+
+
+def test_missing_cgpa_is_reported_as_profile_required_by_api(client):
+    client.post('/api/auth/register', json={
+        'firstName': 'Incomplete', 'lastName': 'Candidate',
+        'email': 'incomplete-candidate@example.com', 'password': 'Password123', 'role': 'student'
+    })
+    token = client.post('/api/auth/login', json={
+        'email': 'incomplete-candidate@example.com', 'password': 'Password123'
+    }).get_json()['token']
+    auth = {'Authorization': f'Bearer {token}'}
+    job = client.get('/api/jobs').get_json()['jobs'][0]
+
+    listed_job = next(
+        item for item in client.get('/api/jobs', headers=auth).get_json()['jobs']
+        if item['id'] == job['id']
+    )
+    assert listed_job['eligibility']['status'] == 'profile_required'
+    assert listed_job['eligibility']['student_cgpa'] is None
+    checked = client.get(f'/api/jobs/{job["id"]}/eligibility', headers=auth).get_json()['eligibility']
+    assert checked['status'] == 'profile_required'
+    assert 'valid CGPA' in checked['reasons'][0]
+    rejected = client.post('/api/applications', json={'job_id': job['id']}, headers=auth)
+    assert rejected.status_code == 400
+    assert rejected.get_json()['eligibility']['status'] == 'profile_required'
+    assert 'correct your profile' in rejected.get_json()['error']
+
+
+def test_resume_cgpa_requires_review_and_never_overwrites_existing_profile_cgpa(client, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    client.post('/api/auth/register', json={
+        'firstName': 'Resume', 'lastName': 'Candidate',
+        'email': 'resume-cgpa@example.com', 'password': 'Password123', 'role': 'student'
+    })
+    token = client.post('/api/auth/login', json={
+        'email': 'resume-cgpa@example.com', 'password': 'Password123'
+    }).get_json()['token']
+    auth = {'Authorization': f'Bearer {token}'}
+    client.put('/api/student/profile', json={'cgpa': 8.5}, headers=auth)
+
+    document = fitz.open()
+    document.new_page().insert_text((72, 72), 'CGPA: 9.35')
+    content = document.tobytes()
+    document.close()
+    uploaded = client.post(
+        '/api/resume/upload',
+        data={'file': (io.BytesIO(content), 'resume.pdf')},
+        headers=auth
+    )
+    assert uploaded.status_code == 200
+    assert uploaded.get_json()['resume']['analysis']['profile_fields']['cgpa'] == 9.35
+    assert client.get('/api/student/profile', headers=auth).get_json()['profile']['cgpa'] == 8.5
+
+    autofill = client.put('/api/student/profile/autofill', json={
+        'values': {'cgpa': 9.35}
+    }, headers=auth)
+    assert autofill.status_code == 200
+    assert autofill.get_json()['preserved_fields'] == ['cgpa']
+    assert autofill.get_json()['profile']['cgpa'] == 8.5
 
 
 def test_resume_upload_and_analysis(client, tmp_path, monkeypatch):
@@ -199,7 +335,7 @@ def test_student_profile_validation_and_complete_placement_workflow(client):
     client.put('/api/student/profile', json={'cgpa': 6.5}, headers=auth)
     ineligible = client.get(f'/api/jobs/{job_id}/eligibility', headers=auth).get_json()['eligibility']
     assert ineligible['eligible'] is False
-    assert 'CGPA below minimum requirement (8.0).' in ineligible['reasons']
+    assert 'Your CGPA (6.5) is below the required cutoff (8).' in ineligible['reasons']
     rejected_apply = client.post('/api/applications', json={'job_id': job_id}, headers=auth)
     assert rejected_apply.status_code == 400
     client.put('/api/student/profile', json={'cgpa': 8.7}, headers=auth)
@@ -315,7 +451,8 @@ def test_skill_evidence_submission_and_quiz(client):
         'verification_notes': 'Full stack API with pytest suite'
     }, headers=auth)
     assert ev_res.status_code == 200
-    assert ev_res.get_json()['evidence']['tier'] == 'evidence_backed'
+    assert ev_res.get_json()['evidence']['tier'] == 'evidence_submitted'
+    assert client.get('/api/student/skills/evidence', headers=auth).get_json()['evidence'][0]['status'] == 'evidence_submitted'
 
     # Fetch quiz questions
     quiz_q = client.get('/api/student/skills/quiz/python', headers=auth)
@@ -324,7 +461,12 @@ def test_skill_evidence_submission_and_quiz(client):
     assert len(questions) > 0
 
     # Submit quiz answers
-    answers = {q['id']: 'dict' if q['id'] == 1 else 'O(1)' if q['id'] == 2 else 'yield' for q in questions}
+    answers = [
+        {'question_index': index, 'selected_option': question['options'].index(
+            'dict' if question['id'] == 1 else 'O(1)' if question['id'] == 2 else 'yield'
+        )}
+        for index, question in enumerate(questions)
+    ]
     quiz_sub = client.post('/api/student/skills/quiz/submit', json={
         'skill_name': 'Python',
         'answers': answers
@@ -375,7 +517,7 @@ def test_recruiter_feedback_on_application(client):
     rec_token = client.post('/api/auth/login', json={'email': 'fbrecruiter@example.com', 'password': 'Password123'}).get_json()['token']
     rec_auth = {'Authorization': f'Bearer {rec_token}'}
 
-    job = client.post('/api/jobs', json={'title': 'Python Dev', 'description': 'Dev', 'required_skills': ['Python']}, headers=rec_auth).get_json()['job']
+    job = client.post('/api/jobs', json={'title': 'Python Dev', 'description': 'Dev', 'company_name': 'Feedback Recruiter Co', 'required_skills': ['Python']}, headers=rec_auth).get_json()['job']
     app = client.post('/api/applications', json={'job_id': job['id']}, headers={'Authorization': f'Bearer {st_token}'}).get_json()['application']
 
     # Recruiter updates status with feedback
@@ -400,9 +542,7 @@ def test_recruiter_feedback_on_application(client):
 
 
 def test_placement_intelligence_and_deadlines(client):
-    reg = client.post('/api/auth/register', json={'firstName': 'Intel', 'lastName': 'Officer', 'email': 'intel_officer@example.com', 'password': 'Password123', 'role': 'officer'})
-    assert reg.status_code == 201
-    token = client.post('/api/auth/login', json={'email': 'intel_officer@example.com', 'password': 'Password123'}).get_json()['token']
+    token = client.post('/api/auth/login', json={'email': 'officer@demo.com', 'password': 'Officer@123'}).get_json()['token']
     auth = {'Authorization': f'Bearer {token}'}
 
     intel_res = client.get('/api/dashboard/intelligence', headers=auth)
@@ -416,10 +556,9 @@ def test_placement_intelligence_and_deadlines(client):
 
 
 def test_admin_dashboard_and_user_moderation(client):
-    # Admin registration and access
-    reg = client.post('/api/auth/register', json={'firstName': 'Sys', 'lastName': 'Admin', 'email': 'sysadmin@example.com', 'password': 'Password123', 'role': 'admin'})
-    assert reg.status_code == 201
-    admin_token = client.post('/api/auth/login', json={'email': 'sysadmin@example.com', 'password': 'Password123'}).get_json()['token']
+    # Privileged roles are provisioned, never self-selected during registration.
+    assert client.post('/api/auth/register', json={'email': 'sysadmin@example.com', 'password': 'Password123', 'role': 'admin'}).status_code == 403
+    admin_token = client.post('/api/auth/login', json={'email': 'admin@demo.com', 'password': 'Admin@123'}).get_json()['token']
     admin_auth = {'Authorization': f'Bearer {admin_token}'}
 
     # Student should be forbidden from accessing admin dashboard
@@ -458,3 +597,134 @@ def test_notifications_read_all_and_unread_count(client):
     assert read_all.status_code == 200
     res_after = client.get('/api/notifications', headers=auth)
     assert res_after.get_json()['unread_count'] == 0
+
+
+def test_resume_is_persisted_and_clear_preserves_manually_sourced_data(client, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    registration = client.post('/api/auth/register', json={
+        'firstName': 'Manual', 'lastName': 'Student', 'email': 'resume-clear@example.com',
+        'password': 'Password123', 'role': 'student'
+    })
+    assert registration.status_code == 201
+    token = client.post('/api/auth/login', json={
+        'email': 'resume-clear@example.com', 'password': 'Password123'
+    }).get_json()['token']
+    auth = {'Authorization': f'Bearer {token}'}
+    client.put('/api/student/profile', json={
+        'first_name': 'Manual', 'last_name': 'Student', 'department': 'CSE',
+        'skills': []
+    }, headers=auth)
+
+    pdf = fitz.open()
+    pdf.new_page().insert_text(
+        (72, 72),
+        'Name: Resume Name\nEmail: resume@example.com\nPhone: +1 555 123 4567\n'
+        'University: Example University\nDegree: B.Tech\nCGPA: 8.5\nSkills: Python'
+    )
+    content = pdf.tobytes()
+    pdf.close()
+    upload = client.post(
+        '/api/resume/upload',
+        data={'file': (io.BytesIO(content), 'resume.pdf')},
+        headers=auth
+    )
+    assert upload.status_code == 200
+    resume_id = upload.get_json()['resume']['id']
+    assert client.get('/api/student/profile', headers=auth).get_json()['profile']['skills'] == []
+
+    refreshed_token = client.post('/api/auth/login', json={
+        'email': 'resume-clear@example.com', 'password': 'Password123'
+    }).get_json()['token']
+    refreshed_auth = {'Authorization': f'Bearer {refreshed_token}'}
+    saved = client.get('/api/resume/analysis', headers=refreshed_auth).get_json()
+    assert saved['resume']['filename'] == 'resume.pdf'
+    assert saved['analysis']['skills'] == ['Python']
+    assert client.get(saved['resume']['file_url'], headers=refreshed_auth).status_code == 200
+    from backend.models import Resume
+    with client.application.app_context():
+        stored_path = Resume.query.filter_by(user_id=registration.get_json()['user']['id']).one().file_path
+    assert os.path.exists(stored_path)
+
+    autofill = client.put('/api/student/profile/autofill', json={
+        'values': {'first_name': 'Resume', 'skills': ['Python']}
+    }, headers=auth)
+    assert autofill.status_code == 200
+    evidence = client.post('/api/student/skills/evidence', json={
+        'skill_name': 'SQL',
+        'evidence_type': 'github',
+        'evidence_url': 'https://github.com/example/sql-project'
+    }, headers=auth)
+    assert evidence.status_code == 200
+
+    clear = client.delete('/api/resume', headers=auth)
+    assert clear.status_code == 200
+    profile = client.get('/api/student/profile', headers=auth).get_json()['profile']
+    assert profile['first_name'] == ''
+    assert profile['department'] == 'CSE'
+    assert profile['skills'] == ['SQL']
+    assert client.get('/api/resume/analysis', headers=auth).get_json()['resume'] is None
+    assert not os.path.exists(stored_path)
+
+
+def test_officer_student_counts_are_database_authoritative(client):
+    student = client.post('/api/auth/register', json={
+        'firstName': 'Counted', 'lastName': 'Student', 'email': 'counted@example.com',
+        'password': 'Password123', 'role': 'student'
+    })
+    assert student.status_code == 201
+    assert client.post('/api/auth/register', json={
+        'firstName': 'Not', 'lastName': 'Officer', 'email': 'not-officer@example.com',
+        'password': 'Password123', 'role': 'officer'
+    }).status_code == 403
+    token = client.post('/api/auth/login', json={
+        'email': 'officer@demo.com', 'password': 'Officer@123'
+    }).get_json()['token']
+    auth = {'Authorization': f'Bearer {token}'}
+
+    dashboard_count = client.get('/api/dashboard/officer', headers=auth).get_json()['statistics']['students']
+    intelligence_count = client.get('/api/dashboard/intelligence', headers=auth).get_json()['dataset_size']['students']
+    assert dashboard_count == intelligence_count
+    second_client = client.application.test_client()
+    assert second_client.get('/api/dashboard/officer', headers=auth).get_json()['statistics']['students'] == dashboard_count
+
+
+def test_readiness_and_what_if_share_a_single_score_model(client):
+    client.post('/api/auth/register', json={
+        'firstName': 'Twin', 'lastName': 'Consistent', 'email': 'twin-score@example.com',
+        'password': 'Password123', 'role': 'student'
+    })
+    token = client.post('/api/auth/login', json={
+        'email': 'twin-score@example.com', 'password': 'Password123'
+    }).get_json()['token']
+    auth = {'Authorization': f'Bearer {token}'}
+
+    current = client.get('/api/career/readiness-twin', headers=auth).get_json()
+    simulation = client.post('/api/career/what-if', json={
+        'added_skills': [], 'has_project': False, 'simulated_cgpa': None
+    }, headers=auth).get_json()
+    assert simulation['current_score'] == current['composite_score']
+    assert simulation['simulated_score'] == current['composite_score']
+    assert current['job_analyses']
+
+
+def test_recruiters_can_manage_only_their_own_requisitions(client):
+    recruiter_token = client.post('/api/auth/login', json={
+        'email': 'recruiter@demo.com', 'password': 'Recruiter@123'
+    }).get_json()['token']
+    recruiter_auth = {'Authorization': f'Bearer {recruiter_token}'}
+    recruiter_jobs = client.get('/api/dashboard/recruiter', headers=recruiter_auth).get_json()['jobs']
+    target = recruiter_jobs[0]
+    changed = client.patch(f'/api/jobs/{target["id"]}', json={'status': 'Closed'}, headers=recruiter_auth)
+    assert changed.status_code == 200
+    assert changed.get_json()['job']['status'] == 'Closed'
+    assert all(job['id'] != target['id'] for job in client.get('/api/jobs').get_json()['jobs'])
+
+    client.post('/api/auth/register', json={
+        'firstName': 'Other', 'lastName': 'Recruiter', 'email': 'other-recruiter@example.com',
+        'password': 'Password123', 'role': 'recruiter'
+    })
+    other_token = client.post('/api/auth/login', json={
+        'email': 'other-recruiter@example.com', 'password': 'Password123'
+    }).get_json()['token']
+    denied = client.patch(f'/api/jobs/{target["id"]}', json={'status': 'Archived'}, headers={'Authorization': f'Bearer {other_token}'})
+    assert denied.status_code == 404

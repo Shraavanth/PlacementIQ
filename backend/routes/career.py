@@ -1,7 +1,8 @@
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 from backend.extensions import db
-from backend.models import Resume, User
+from backend.models import Job, Resume, User
+from backend.utils import compute_eligibility, compute_match_score
 
 blueprint = Blueprint('career', __name__, url_prefix='/api/career')
 
@@ -27,6 +28,110 @@ CAREER_PATHS = [
         'roadmap': ['Learn networking and Linux fundamentals', 'Complete a safe security lab exercise', 'Study cloud security and incident response basics']
     }
 ]
+
+
+def readiness_scores(user, added_skills=None, simulated_cgpa=None, has_project=False, has_interview_practice=False):
+    from backend.models import InterviewAttempt, Resume, SkillEvidence
+
+    profile = user.student_profile
+    resume = Resume.query.filter_by(user_id=user.id).order_by(Resume.created_at.desc()).first()
+    evidences = SkillEvidence.query.filter_by(user_id=user.id).all()
+    interview_count = InterviewAttempt.query.filter_by(user_id=user.id).count()
+    extra_skills = added_skills or []
+
+    academic_score = 0
+    academic_factors = []
+    cgpa = simulated_cgpa if simulated_cgpa is not None else (profile.cgpa if profile else None)
+    if cgpa is not None:
+        if cgpa >= 7.5:
+            academic_score += 10
+            academic_factors.append(f'Strong CGPA ({cgpa}/10)')
+        else:
+            academic_score += 6
+            academic_factors.append(f'CGPA ({cgpa}/10) meets base criteria')
+    else:
+        academic_factors.append('CGPA missing in profile')
+    if profile and profile.department and profile.graduation_year:
+        academic_score += 10
+        academic_factors.append(f'Academic details provided ({profile.department}, {profile.graduation_year})')
+    else:
+        academic_factors.append('Department or graduation year not specified')
+    if profile and profile.university and profile.degree:
+        academic_score += 5
+        academic_factors.append('Institution and degree details complete')
+
+    profile_skills = profile.skills or [] if profile else []
+    resume_skills = resume.extracted_skills or [] if resume else []
+    skills = {
+        str(skill).casefold()
+        for skill in profile_skills + resume_skills + extra_skills
+        if isinstance(skill, str) and skill.strip()
+    }
+    tech_score = 15 if len(skills) >= 5 else 8 if skills else 0
+    if skills:
+        tech_factors = [f'{len(skills)} distinct skills listed or mentioned; resume mentions are unverified']
+    else:
+        tech_factors = ['No technical skills listed or extracted from a resume']
+    assessed_count = sum(e.tier == 'assessed' for e in evidences)
+    tech_score += 20 if assessed_count >= 3 else 10 if assessed_count else 0
+    if assessed_count:
+        tech_factors.append(f'{assessed_count} skills passed the in-app assessment')
+    elif any(e.tier in {'evidence_submitted', 'evidence_backed'} for e in evidences):
+        tech_factors.append('Evidence was submitted but has not been independently verified')
+    else:
+        tech_factors.append('No skills have passed an in-app assessment')
+
+    projects = profile.projects or [] if profile else []
+    resume_projects = ((resume.analysis or {}).get('profile_fields') or {}).get('projects', []) if resume else []
+    internships = profile.internships or [] if profile else []
+    certifications = profile.certifications or [] if profile else []
+    documented_projects = {
+        str(project).casefold()
+        for project in list(projects or []) + list(resume_projects or [])
+        if isinstance(project, str)
+    }
+    if documented_projects or has_project:
+        exp_score = 10
+        exp_factors = [f'{len(documented_projects) + int(has_project)} project(s) listed in the profile/resume or simulated; not independently verified']
+    else:
+        exp_score = 0
+        exp_factors = ['No project work documented']
+    if internships or certifications:
+        exp_score += 10
+        exp_factors.append('Internship or certification credentials present')
+    else:
+        exp_factors.append('No internships or industry certifications added yet')
+
+    prep_score = 0
+    prep_factors = []
+    if resume and resume.status == 'processed':
+        prep_score += 10
+        prep_factors.append('Resume uploaded and analyzed')
+    elif resume:
+        prep_score += 5
+        prep_factors.append('Resume uploaded (review suggested)')
+    else:
+        prep_factors.append('Resume not yet uploaded')
+    if interview_count >= 3:
+        prep_score += 10
+        prep_factors.append(f'{interview_count} mock interview attempts logged')
+    elif interview_count >= 1 or has_interview_practice:
+        prep_score += 5
+        prep_factors.append(f'{interview_count} mock interview practice attempt(s) logged or simulated')
+    else:
+        prep_factors.append('No mock interview sessions completed')
+
+    dimensions = [
+        {'name': 'Academic & Eligibility', 'score': round(academic_score * 100 / 25), 'weight': '25%', 'factors': academic_factors},
+        {'name': 'Technical & Skill Coverage', 'score': round(tech_score * 100 / 35), 'weight': '35%', 'factors': tech_factors},
+        {'name': 'Portfolio & Experience', 'score': round(exp_score * 100 / 20), 'weight': '20%', 'factors': exp_factors},
+        {'name': 'Practice & Interview Preparedness', 'score': round(prep_score * 100 / 20), 'weight': '20%', 'factors': prep_factors}
+    ]
+    return {
+        'score': min(100, academic_score + tech_score + exp_score + prep_score),
+        'dimensions': dimensions,
+        'skills': sorted(skills)
+    }
 
 
 @blueprint.route('/guidance', methods=['GET'])
@@ -70,130 +175,83 @@ def readiness_twin():
     if user.role != 'student':
         return jsonify({'error': 'Readiness twin is available to students.'}), 403
 
-    from backend.models import InterviewAttempt, Resume, RoadmapTask, SkillEvidence
+    from backend.models import Application, RoadmapTask
     profile = user.student_profile
-    resume = Resume.query.filter_by(user_id=user.id).order_by(Resume.created_at.desc()).first()
-    evidences = SkillEvidence.query.filter_by(user_id=user.id).all()
-    interview_count = InterviewAttempt.query.filter_by(user_id=user.id).count()
     roadmap_tasks = RoadmapTask.query.filter_by(user_id=user.id).all()
-
-    # Dimension 1: Academic & Eligibility Readiness (0 - 25 pts)
-    academic_score = 0
-    academic_factors = []
-    if profile:
-        if profile.cgpa and profile.cgpa >= 7.5:
-            academic_score += 10
-            academic_factors.append(f'Strong CGPA ({profile.cgpa}/10)')
-        elif profile.cgpa:
-            academic_score += 6
-            academic_factors.append(f'CGPA ({profile.cgpa}/10) meets base criteria')
-        else:
-            academic_factors.append('CGPA missing in profile')
-
-        if profile.department and profile.graduation_year:
-            academic_score += 10
-            academic_factors.append(f'Academic enrollment verified ({profile.department}, {profile.graduation_year})')
-        else:
-            academic_factors.append('Department or graduation year not specified')
-
-        if profile.university and profile.degree:
-            academic_score += 5
-            academic_factors.append('Institution and degree details complete')
-    else:
-        academic_factors.append('Profile record missing')
-
-    # Dimension 2: Technical & Skill Coverage Readiness (0 - 35 pts)
-    tech_score = 0
-    tech_factors = []
-    student_skills = profile.skills or [] if profile else []
-    if len(student_skills) >= 5:
-        tech_score += 15
-        tech_factors.append(f'{len(student_skills)} skills listed on profile')
-    elif student_skills:
-        tech_score += 8
-        tech_factors.append(f'{len(student_skills)} skills listed (recommend at least 5)')
-    else:
-        tech_factors.append('No technical skills listed')
-
-    verified_evidences = [e for e in evidences if e.tier in {'assessed', 'evidence_backed', 'verified'}]
-    if len(verified_evidences) >= 3:
-        tech_score += 20
-        tech_factors.append(f'{len(verified_evidences)} skills verified through assessments or evidence')
-    elif verified_evidences:
-        tech_score += 10
-        tech_factors.append(f'{len(verified_evidences)} skill(s) verified')
-    else:
-        tech_factors.append('No skills verified yet via quizzes or portfolio links')
-
-    # Dimension 3: Experience & Project Portfolio Readiness (0 - 20 pts)
-    exp_score = 0
-    exp_factors = []
-    projects = profile.projects or [] if profile else []
-    internships = profile.internships or [] if profile else []
-    certifications = profile.certifications or [] if profile else []
-
-    if projects:
-        exp_score += 10
-        exp_factors.append(f'{len(projects)} technical project(s) recorded')
-    else:
-        exp_factors.append('No project work documented')
-
-    if internships or certifications:
-        exp_score += 10
-        exp_factors.append('Internship or certification credentials present')
-    else:
-        exp_factors.append('No internships or industry certifications added yet')
-
-    # Dimension 4: Practice & Preparation Readiness (0 - 20 pts)
-    prep_score = 0
-    prep_factors = []
-    if resume and resume.status == 'processed':
-        prep_score += 10
-        prep_factors.append('Resume uploaded and verified by parser')
-    elif resume:
-        prep_score += 5
-        prep_factors.append('Resume uploaded (review suggested)')
-    else:
-        prep_factors.append('Resume not yet uploaded')
-
-    if interview_count >= 3:
-        prep_score += 10
-        prep_factors.append(f'{interview_count} mock interview attempts logged')
-    elif interview_count >= 1:
-        prep_score += 5
-        prep_factors.append('1-2 interview practice attempts logged')
-    else:
-        prep_factors.append('No mock interview sessions completed')
-
-    composite_score = min(100, academic_score + tech_score + exp_score + prep_score)
+    readiness = readiness_scores(user)
+    composite_score = readiness['score']
+    profile_values = {
+        'cgpa': profile.cgpa if profile else None,
+        'department': profile.department if profile else None,
+        'graduation_year': profile.graduation_year if profile else None,
+        'skills': profile.skills or [] if profile else [],
+        'university': profile.university if profile else None,
+        'degree': profile.degree if profile else None,
+        'preferred_roles': profile.preferred_roles or [] if profile else [],
+        'preferred_locations': profile.preferred_locations or [] if profile else []
+    }
+    job_analyses = []
+    for job in Job.query.filter_by(status='Published').order_by(Job.created_at.desc()).all():
+        requirements = {
+            'min_cgpa': job.min_cgpa,
+            'eligible_departments': job.eligible_departments or [],
+            'required_skills': job.required_skills or [],
+            'graduation_year': job.graduation_year
+        }
+        eligibility = compute_eligibility(profile_values, requirements)
+        job_analyses.append({
+            'job_id': job.id,
+            'title': job.title,
+            'company_name': job.company.name if job.company else 'Company',
+            'eligible': eligibility['eligible'],
+            'eligibility_status': eligibility['status'],
+            'eligibility_reasons': eligibility['reasons'],
+            'student_cgpa': eligibility['student_cgpa'],
+            'required_cgpa': eligibility['required_cgpa'],
+            'skill_match_percentage': eligibility['skill_match_percentage'],
+            'missing_data': eligibility['missing_data'],
+            'missing_skills': eligibility['missing_skills'],
+            'matched_skills': eligibility['matched_skills'],
+            'match_score': compute_match_score(profile_values, {
+                'required_skills': job.required_skills or [],
+                'title': job.title,
+                'location': job.location
+            })
+        })
+    missing_profile_fields = [
+        field for field in ('phone', 'university', 'degree', 'department', 'graduation_year', 'cgpa', 'skills')
+        if not getattr(profile, field, None)
+    ]
+    application_outcomes = {
+        status: Application.query.filter_by(student_id=user.id, status=status).count()
+        for status in ('Applied', 'Under Review', 'Shortlisted', 'Interview', 'Hired', 'Rejected')
+    }
 
     # Readiness level classification
     if composite_score >= 80:
         level = 'Placement Ready'
-        summary = 'Exceptional placement readiness across academics, verified technical skills, and preparation.'
+        summary = 'Strong score across the readiness dimensions shown below. Mandatory eligibility is evaluated separately for each job.'
     elif composite_score >= 60:
         level = 'Competitive'
-        summary = 'Solid foundation. Prioritize skill verification and interview practice to maximize offer rates.'
+        summary = 'A developing foundation. Use the dimension details and job-specific gaps to prioritize preparation.'
     elif composite_score >= 40:
         level = 'Developing'
-        summary = 'Active progress. Focus on building projects and completing missing profile fields.'
+        summary = 'Some preparation is recorded. Focus on building projects and completing the missing profile fields.'
     else:
         level = 'Needs Foundation'
-        summary = 'Early stage. Complete your profile, upload your resume, and begin core skill building.'
+        summary = 'The available profile shows preparation gaps. Complete your profile and begin a focused skills plan.'
 
     return jsonify({
         'composite_score': composite_score,
         'readiness_level': level,
         'summary': summary,
-        'dimensions': [
-            {'name': 'Academic & Eligibility', 'score': round(academic_score * 100 / 25), 'weight': '25%', 'factors': academic_factors},
-            {'name': 'Technical & Skill Coverage', 'score': round(tech_score * 100 / 35), 'weight': '35%', 'factors': tech_factors},
-            {'name': 'Portfolio & Experience', 'score': round(exp_score * 100 / 20), 'weight': '20%', 'factors': exp_factors},
-            {'name': 'Practice & Interview Preparedness', 'score': round(prep_score * 100 / 20), 'weight': '20%', 'factors': prep_factors}
-        ],
+        'dimensions': readiness['dimensions'],
         'completed_tasks_count': sum(1 for t in roadmap_tasks if t.completed),
         'total_tasks_count': len(roadmap_tasks),
-        'methodology': 'Calculated via 4-dimensional evidence weights (Academics 25%, Technical Verification 35%, Projects 20%, Preparation 20%).'
+        'methodology': 'Calculated via four dimensions: academics (25%), profile skill coverage and passed in-app assessments (35%), documented projects and experience (20%), and resume analysis and interview practice (20%). Submitted links and resume mentions are not verification.',
+        'missing_profile_fields': missing_profile_fields,
+        'job_analyses': job_analyses,
+        'application_outcomes': application_outcomes
     })
 
 
@@ -205,23 +263,32 @@ def what_if_simulation():
     if user.role != 'student':
         return jsonify({'error': 'Simulation is available to students.'}), 403
 
-    from backend.models import SkillEvidence
     data = request.get_json(silent=True) or {}
     added_skills = data.get('added_skills', [])
     simulated_cgpa = data.get('simulated_cgpa')
     has_project = bool(data.get('has_project', False))
     has_interview_practice = bool(data.get('has_interview_practice', False))
+    if not isinstance(added_skills, list) or not all(isinstance(skill, str) and skill.strip() for skill in added_skills):
+        return jsonify({'error': 'added_skills must be a list of non-empty skill names.'}), 400
+    if simulated_cgpa is not None:
+        try:
+            simulated_cgpa = float(simulated_cgpa)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'Simulated CGPA must be a number between 0 and 10.'}), 400
+        if not 0 <= simulated_cgpa <= 10:
+            return jsonify({'error': 'Simulated CGPA must be a number between 0 and 10.'}), 400
 
     profile = user.student_profile
     base_skills = list(profile.skills or []) if profile else []
-    all_sim_skills = list(set([s.strip() for s in base_skills + added_skills if s.strip()]))
-
-    # Compute baseline score
-    sim_academic = 15 if (simulated_cgpa or (profile and profile.cgpa)) else 5
-    sim_tech = min(35, len(all_sim_skills) * 4 + (15 if added_skills else 5))
-    sim_exp = 18 if (has_project or (profile and profile.projects)) else 8
-    sim_prep = 18 if (has_interview_practice or user.interview_attempts) else 8
-    sim_score = min(100, sim_academic + sim_tech + sim_exp + sim_prep)
+    all_sim_skills = sorted({skill.strip() for skill in base_skills + added_skills if skill.strip()})
+    current_readiness = readiness_scores(user)
+    simulated_readiness = readiness_scores(
+        user,
+        added_skills=added_skills,
+        simulated_cgpa=simulated_cgpa,
+        has_project=has_project,
+        has_interview_practice=has_interview_practice
+    )
 
     # Calculate match against target paths
     sim_paths = []
@@ -237,7 +304,17 @@ def what_if_simulation():
 
     return jsonify({
         'is_simulated': True,
-        'simulated_composite_score': sim_score,
+        'current_score': current_readiness['score'],
+        'simulated_score': simulated_readiness['score'],
+        'current_composite_score': current_readiness['score'],
+        'simulated_composite_score': simulated_readiness['score'],
+        'delta_points': simulated_readiness['score'] - current_readiness['score'],
+        'simulated_dimensions': {
+            'academic': simulated_readiness['dimensions'][0]['score'],
+            'technical': simulated_readiness['dimensions'][1]['score'],
+            'experience': simulated_readiness['dimensions'][2]['score'],
+            'practice': simulated_readiness['dimensions'][3]['score']
+        },
         'skills_considered': all_sim_skills,
         'simulated_path_fits': sim_paths,
         'disclaimer': 'Hypothetical simulation based on prospective improvements. Does not alter official academic records or bypass mandatory eligibility requirements.'
@@ -248,20 +325,20 @@ INITIAL_ROADMAP_TASKS = [
     {
         'timeframe': '7-day',
         'title': 'Verify Core Skill with Code Evidence',
-        'description': 'Link a public GitHub repository or take a verified skill assessment for your top primary skill.',
+        'description': 'Add a project or GitHub link for review, or complete an available skill assessment.',
         'priority': 'High',
         'estimated_effort': '2 hours',
-        'completion_criteria': 'Skill tier upgraded to Evidence-Backed or Assessed on profile.',
-        'reason': 'Verified skills rank higher in recruiter candidate screening.'
+        'completion_criteria': 'Skill evidence is submitted or an available in-app assessment is completed.',
+        'reason': 'Submitted evidence and assessment results help explain the skills listed in your profile.'
     },
     {
         'timeframe': '7-day',
         'title': 'Resume Target Alignment',
-        'description': 'Run resume analysis against at least 2 published target jobs to identify exact skill gaps.',
+        'description': 'Compare your profile against published roles to identify required-skill and eligibility gaps.',
         'priority': 'High',
         'estimated_effort': '1 hour',
-        'completion_criteria': 'Identify and log missing skills for target roles.',
-        'reason': 'Ensures your resume contains machine-readable skill keywords required by job descriptions.'
+        'completion_criteria': 'Review the gaps for at least two published target roles.',
+        'reason': 'Separates mandatory eligibility from general skill matching.'
     },
     {
         'timeframe': '30-day',
@@ -304,9 +381,38 @@ def get_roadmap_tasks():
     from backend.models import RoadmapTask
     tasks = RoadmapTask.query.filter_by(user_id=user.id).order_by(RoadmapTask.created_at.asc()).all()
 
-    # Seed initial tasks if none exist yet for this student
     if not tasks:
-        for item in INITIAL_ROADMAP_TASKS:
+        initial_tasks = [dict(item) for item in INITIAL_ROADMAP_TASKS]
+        profile = user.student_profile
+        missing_profile_fields = [
+            field.replace('_', ' ')
+            for field in ('phone', 'university', 'degree', 'department', 'graduation_year', 'cgpa')
+            if not getattr(profile, field, None)
+        ]
+        if missing_profile_fields:
+            initial_tasks.insert(0, {
+                'timeframe': '7-day',
+                'title': 'Complete your placement profile',
+                'description': f'Add the missing profile details: {", ".join(missing_profile_fields)}.',
+                'priority': 'High',
+                'estimated_effort': '1 hour',
+                'completion_criteria': 'Save the missing academic and contact details in your profile.',
+                'reason': 'Complete data is needed for accurate eligibility checks.'
+            })
+
+        listed_skills = {skill.casefold() for skill in (profile.skills or [])} if profile else set()
+        published_skills = {
+            skill for job in Job.query.filter_by(status='Published').all()
+            for skill in (job.required_skills or [])
+        }
+        missing_skills = sorted(skill for skill in published_skills if skill.casefold() not in listed_skills)
+        if missing_skills:
+            skill_task = next((item for item in initial_tasks if item['title'] == 'Build a Full-Stack or Analytical Capstone Project'), None)
+            if skill_task:
+                skill_task['description'] = f'Build a documented project that demonstrates role-relevant skills: {", ".join(missing_skills[:5])}.'
+                skill_task['reason'] = 'Project work can help address skills currently requested by published campus roles.'
+
+        for item in initial_tasks:
             t = RoadmapTask(
                 user_id=user.id,
                 timeframe=item['timeframe'],
@@ -550,4 +656,3 @@ def get_interview_history():
         'total_attempts': len(attempts),
         'average_score': avg_score
     })
-

@@ -31,6 +31,9 @@ test('navigates to the student dashboard after a successful login', async () => 
         json: async () => ({ token: 'student-token', user: { role: 'student' } })
       };
     }
+    if (url === '/api/auth/me') {
+      return { ok: true, json: async () => ({ user: { role: 'student' } }) };
+    }
     return {
       ok: true,
       json: async () => ({

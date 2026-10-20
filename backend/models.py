@@ -49,6 +49,7 @@ class StudentProfile(db.Model):
     certifications = db.Column(db.JSON, default=list)
     projects = db.Column(db.JSON, default=list)
     internships = db.Column(db.JSON, default=list)
+    field_sources = db.Column(db.JSON, default=dict)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -61,7 +62,8 @@ class StudentProfile(db.Model):
             'degree': self.degree, 'department': self.department, 'graduation_year': self.graduation_year,
             'cgpa': self.cgpa, 'preferred_roles': self.preferred_roles or [], 'preferred_locations': self.preferred_locations or [],
             'preferred_industries': self.preferred_industries or [], 'skills': self.skills or [], 'certifications': self.certifications or [],
-            'projects': self.projects or [], 'internships': self.internships or []
+            'projects': self.projects or [], 'internships': self.internships or [],
+            'field_sources': self.field_sources or {}
         }
 
 class Company(db.Model):

@@ -244,7 +244,10 @@ export default function StudentDashboard() {
                   </div>
                   <div className="flex items-center gap-3">
                     <span className="badge badge-sage text-xs font-semibold">
-                      {job.match_score || 0}% Match
+                      {job.skill_match_percentage ?? 0}% Skills
+                    </span>
+                    <span className={`text-[11px] font-semibold ${job.eligible ? 'text-forest-800' : job.eligibility_status === 'profile_required' ? 'text-amber-800' : 'text-ruby-700'}`}>
+                      {job.eligible ? 'Eligible to apply' : job.eligibility_status === 'profile_required' ? 'Profile info required' : 'Not eligible'}
                     </span>
                     <Link to={`/jobs/${job.id}`} className="btn btn-secondary text-xs px-3 py-1.5">
                       Inspect
@@ -260,6 +263,11 @@ export default function StudentDashboard() {
                       </span>
                     ))}
                   </div>
+                )}
+                {job.missing_skills?.length > 0 && (
+                  <p className="mt-2 text-[11px] text-muted-600">
+                    Skill gaps to develop: {job.missing_skills.join(', ')}. These do not block applications.
+                  </p>
                 )}
               </div>
             ))}

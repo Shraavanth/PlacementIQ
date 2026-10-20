@@ -1,5 +1,6 @@
 import re
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 
 SKILL_MAP = {
     'python': 'Python',
@@ -61,51 +62,51 @@ def extract_education_from_text(text):
     return found
 
 
+def normalize_cgpa(value):
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return None
+    try:
+        cgpa = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+    if not cgpa.is_finite() or cgpa < 0 or cgpa > 10:
+        return None
+    return float(cgpa)
+
+
 def compute_eligibility(student_profile, job):
     reasons = []
     criteria_met = []
     criteria_missing = []
     missing_data = []
 
-    if not student_profile:
-        return {
-            'eligible': False,
-            'reasons': ['Student profile is missing.'],
-            'criteria_met': [],
-            'criteria_missing': ['Student profile'],
-            'missing_data': ['profile'],
-            'matched_skills': [],
-            'missing_skills': job.get('required_skills') or [],
-            'mandatory_breakdown': {},
-            'preferred_qualifications': [],
-            'actionable_steps': ['Complete your student profile to check eligibility.'],
-            'score': 0,
-            'score_basis': 'Insufficient profile data to evaluate eligibility.'
-        }
+    student_profile = student_profile or {}
+    job = job or {}
 
-    # Mandatory Criterion 1: CGPA
-    cgpa = student_profile.get('cgpa')
-    min_cgpa = job.get('min_cgpa')
-    cgpa_status = 'met'
-    if min_cgpa and float(min_cgpa) > 0:
-        if cgpa is None or cgpa == '':
-            missing_data.append('cgpa')
-            criteria_missing.append('Minimum CGPA')
-            reasons.append(f'CGPA below minimum requirement ({min_cgpa}).')
-            cgpa_status = 'missing'
-        elif float(cgpa) < float(min_cgpa):
-            reasons.append(f'CGPA below minimum requirement ({min_cgpa}).')
-            criteria_missing.append('Minimum CGPA')
-            cgpa_status = 'unmet'
-        else:
-            criteria_met.append('Minimum CGPA')
+    cgpa = normalize_cgpa(student_profile.get('cgpa'))
+    min_cgpa = normalize_cgpa(job.get('min_cgpa'))
+    if min_cgpa is None:
+        min_cgpa = 0.0
+    if cgpa is None:
+        missing_data.append('cgpa')
+        criteria_missing.append('CGPA')
+        reasons.append('Add a valid CGPA from 0 to 10 to your profile to check this requirement.')
+        cgpa_status = 'missing'
+    elif cgpa < min_cgpa:
+        reasons.append(f'Your CGPA ({cgpa:g}) is below the required cutoff ({min_cgpa:g}).')
+        criteria_missing.append('Minimum CGPA')
+        cgpa_status = 'unmet'
     else:
+        cgpa_status = 'met'
         criteria_met.append('Minimum CGPA')
 
-    # Mandatory Criterion 2: Department
     eligible_departments = {str(department).casefold() for department in job.get('eligible_departments') or []}
     dept = student_profile.get('department')
-    dept_status = 'met'
+    dept_status = 'not_required'
     if eligible_departments:
         if not dept:
             missing_data.append('department')
@@ -118,26 +119,16 @@ def compute_eligibility(student_profile, job):
             dept_status = 'unmet'
         else:
             criteria_met.append('Department match')
-    else:
-        criteria_met.append('Department match')
+            dept_status = 'met'
 
-    # Mandatory Criterion 3: Skills
     required_skills = job.get('required_skills') or []
     student_skills = {str(skill).casefold() for skill in student_profile.get('skills') or []}
     matched_skills = [s for s in required_skills if str(s).casefold() in student_skills]
     missing_skills = [s for s in required_skills if str(s).casefold() not in student_skills]
-    skills_status = 'met'
-    if missing_skills:
-        reasons.append('Missing required skills: ' + ', '.join(missing_skills))
-        criteria_missing.append('Required skills')
-        skills_status = 'unmet'
-    else:
-        criteria_met.append('Required skills')
 
-    # Mandatory Criterion 4: Graduation Year
     required_graduation_year = job.get('graduation_year')
     student_graduation_year = student_profile.get('graduation_year')
-    grad_status = 'met'
+    grad_status = 'not_required'
     if required_graduation_year:
         if not student_graduation_year:
             missing_data.append('graduation_year')
@@ -152,8 +143,10 @@ def compute_eligibility(student_profile, job):
             criteria_met.append('Graduation year')
     else:
         criteria_met.append('Graduation year')
+        grad_status = 'met'
 
-    eligible = len(reasons) == 0 and len(missing_data) == 0
+    eligible = not reasons and not missing_data
+    eligibility_status = 'profile_required' if missing_data else 'eligible' if eligible else 'ineligible'
 
     # Preferred qualifications (non-mandatory alignment)
     preferred_qualifications = []
@@ -179,7 +172,7 @@ def compute_eligibility(student_profile, job):
     # Actionable steps for the student to improve match
     actionable_steps = []
     for skill in missing_skills:
-        actionable_steps.append(f'Acquire and verify competence in {skill} through a project or assessment.')
+        actionable_steps.append(f'Build a project or complete a course using {skill}.')
     if missing_data:
         actionable_steps.append(f'Complete missing profile fields: {", ".join(missing_data)}.')
     if not actionable_steps and not eligible:
@@ -190,37 +183,44 @@ def compute_eligibility(student_profile, job):
     # Breakdown dictionary for transparent UI display
     mandatory_breakdown = {
         'cgpa': {
-            'required': min_cgpa or 'None',
-            'actual': cgpa if cgpa is not None else 'Not specified',
+            'required': min_cgpa,
+            'actual': cgpa,
             'status': cgpa_status
         },
         'department': {
             'required': job.get('eligible_departments') or ['Any'],
-            'actual': dept or 'Not specified',
+            'actual': dept,
             'status': dept_status
         },
         'graduation_year': {
-            'required': required_graduation_year or 'Any',
-            'actual': student_graduation_year or 'Not specified',
+            'required': required_graduation_year,
+            'actual': student_graduation_year,
             'status': grad_status
         },
         'skills': {
             'required_count': len(required_skills),
             'matched_count': len(matched_skills),
-            'status': skills_status
+            'missing_count': len(missing_skills),
+            'status': 'recommendation'
         }
     }
 
     match_score_info = compute_match_score(student_profile, job, return_breakdown=True)
+    skill_match_percentage = round(len(matched_skills) * 100 / len(required_skills)) if required_skills else 100
 
     return {
         'eligible': eligible,
+        'status': eligibility_status,
+        'student_cgpa': cgpa,
+        'required_cgpa': min_cgpa,
+        'cgpa_status': cgpa_status,
         'reasons': reasons or ['All mandatory criteria satisfied.'],
         'criteria_met': criteria_met,
         'criteria_missing': criteria_missing,
         'missing_data': missing_data,
         'matched_skills': matched_skills,
         'missing_skills': missing_skills,
+        'skill_match_percentage': skill_match_percentage,
         'mandatory_breakdown': mandatory_breakdown,
         'preferred_qualifications': preferred_qualifications,
         'actionable_steps': actionable_steps,
@@ -265,7 +265,12 @@ def make_serialized_job(job):
         'location': job.location,
         'description': job.description,
         'required_skills': job.required_skills or [],
+        'eligible_departments': job.eligible_departments or [],
+        'graduation_year': job.graduation_year,
         'min_cgpa': job.min_cgpa,
+        'openings': job.openings,
+        'work_mode': job.work_mode,
+        'salary': job.salary,
         'status': job.status,
         'eligibility': None,
         'match_score': None,

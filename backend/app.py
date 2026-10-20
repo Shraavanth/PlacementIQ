@@ -1,5 +1,6 @@
 import os
 from flask import Flask, jsonify
+from sqlalchemy import inspect
 from backend.config import Config, TestingConfig
 from backend.extensions import cors, db, jwt
 from backend.seed import seed_database
@@ -10,7 +11,6 @@ from backend.routes.jobs import blueprint as jobs_bp
 from backend.routes.notifications import blueprint as notifications_bp
 from backend.routes.resume import blueprint as resume_bp
 from backend.routes.student import blueprint as student_bp
-from backend.models import User
 
 
 def create_app(test_config=None):
@@ -26,8 +26,12 @@ def create_app(test_config=None):
 
     with app.app_context():
         import backend.models  # noqa: F401
-        from backend.models import CareerRecommendation, User  # noqa: F401
         db.create_all()
+
+        profile_columns = {column['name'] for column in inspect(db.engine).get_columns('student_profiles')}
+        if 'field_sources' not in profile_columns:
+            with db.engine.begin() as conn:
+                conn.execute(db.text('ALTER TABLE student_profiles ADD COLUMN field_sources JSON'))
 
         # Add optional columns to existing tables if missing in SQLite
         for statement in [
@@ -42,18 +46,6 @@ def create_app(test_config=None):
                 pass
 
         seed_database(app)
-        if not CareerRecommendation.query.count():
-            for user in User.query.all():
-                if user.role == 'student':
-                    rec = CareerRecommendation(
-                        user_id=user.id,
-                        title='Software Development',
-                        reason='Strong fit based on technical skills and project experience.',
-                        skills=['Python', 'SQL', 'System Design'],
-                        roadmap=['Build backend APIs', 'Create a portfolio project', 'Prepare for interviews']
-                    )
-                    db.session.add(rec)
-            db.session.commit()
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(career_bp)

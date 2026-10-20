@@ -142,7 +142,7 @@ export default function AuthPage() {
                   {mode === 'login' ? 'Sign in to your account' : 'Create your PlacementIQ account'}
                 </h2>
                 <p className="mt-1 text-xs md:text-sm text-[#77776C]">
-                  {mode === 'login' ? 'Enter your institutional email to access your dashboard.' : 'Select your institutional role to get started.'}
+                {mode === 'login' ? 'Enter your institutional email to access your dashboard.' : 'Create a student or recruiter account. Placement officer access is provisioned by an administrator.'}
                 </p>
               </div>
 
@@ -209,7 +209,6 @@ export default function AuthPage() {
                     >
                       <option value="student">Student — Career guidance & applications</option>
                       <option value="recruiter">Recruiter — Post jobs & manage pipeline</option>
-                      <option value="officer">Placement Officer — College administration</option>
                     </select>
                   </div>
                 )}
@@ -329,4 +328,3 @@ export default function AuthPage() {
     </div>
   );
 }
-

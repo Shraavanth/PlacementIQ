@@ -70,14 +70,14 @@ export default function Layout({ title, children, role = 'student' }) {
     student: [
       { label: 'Dashboard', to: '/student', icon: LayoutDashboard },
       { label: 'Profile & Skills', to: '/student/profile', icon: UserCheck },
-      { label: 'Job Opportunities', to: '/jobs', icon: FileCheck2 },
       { label: 'Resume & Evidence', to: '/resume', icon: FileText },
+      { label: 'Job Opportunities', to: '/jobs', icon: FileCheck2 },
       { label: 'Career & Twin', to: '/career', icon: Compass },
       { label: 'Notifications', to: '/notifications', icon: Bell }
     ],
     recruiter: [
       { label: 'Hiring Dashboard', to: '/recruiter', icon: LayoutDashboard },
-      { label: 'Job Postings', to: '/jobs', icon: FileCheck2 },
+      { label: 'Job Posting', to: '/recruiter/jobs', icon: FileCheck2 },
       { label: 'Notifications', to: '/notifications', icon: Bell }
     ],
     officer: [
@@ -324,4 +324,3 @@ export default function Layout({ title, children, role = 'student' }) {
     </div>
   );
 }
-

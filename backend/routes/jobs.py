@@ -8,7 +8,19 @@ from backend.utils import compute_eligibility, compute_match_score, make_seriali
 blueprint = Blueprint('jobs', __name__, url_prefix='/api')
 
 @blueprint.route('/jobs', methods=['GET'])
+@jwt_required(optional=True)
 def list_jobs():
+    user_id = get_jwt_identity()
+    user = User.query.get(int(user_id)) if user_id else None
+    profile = user.student_profile if user and user.role == 'student' else None
+    student_data = {
+        'cgpa': profile.cgpa if profile else None,
+        'department': profile.department if profile else None,
+        'skills': profile.skills or [] if profile else [],
+        'graduation_year': profile.graduation_year if profile else None,
+        'preferred_roles': profile.preferred_roles or [] if profile else [],
+        'preferred_locations': profile.preferred_locations or [] if profile else []
+    }
     q = Job.query.filter_by(status='Published')
     if request.args.get('search'):
         q = q.filter(Job.title.ilike(f"%{request.args.get('search')}%"))
@@ -16,7 +28,20 @@ def list_jobs():
     results = []
     for job in jobs:
         item = make_serialized_job(job)
-        item['eligibility'] = None
+        if profile:
+            eligibility = compute_eligibility(student_data, {
+                'min_cgpa': job.min_cgpa,
+                'eligible_departments': job.eligible_departments or [],
+                'required_skills': job.required_skills or [],
+                'graduation_year': job.graduation_year,
+                'title': job.title,
+                'location': job.location
+            })
+            item['eligibility'] = eligibility
+            item['match_score'] = eligibility['score']
+            item['skill_match_percentage'] = eligibility['skill_match_percentage']
+        else:
+            item['eligibility'] = None
         results.append(item)
     return jsonify({'jobs': results})
 
@@ -30,8 +55,8 @@ def get_job(job_id):
 def create_job():
     user_id = int(get_jwt_identity())
     user = User.query.get_or_404(user_id)
-    if user.role not in {'recruiter', 'officer'}:
-        return jsonify({'error': 'Unauthorized to create jobs.'}), 403
+    if user.role != 'recruiter':
+        return jsonify({'error': 'Only recruiters can create job requisitions.'}), 403
     data = request.get_json(silent=True) or {}
     title = data.get('title')
     description = data.get('description')
@@ -44,20 +69,44 @@ def create_job():
         return jsonify({'error': 'CGPA cutoff and openings must be valid numbers.'}), 400
     if not 0 <= min_cgpa <= 10 or openings < 1:
         return jsonify({'error': 'CGPA cutoff must be between 0 and 10 and openings must be positive.'}), 400
+    graduation_year = data.get('graduation_year')
+    if graduation_year not in (None, ''):
+        try:
+            graduation_year = int(graduation_year)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'Graduation year must be a valid year.'}), 400
+        if not 1900 <= graduation_year <= 2200:
+            return jsonify({'error': 'Graduation year must be a valid year.'}), 400
+    else:
+        graduation_year = None
     status = data.get('status', 'Published')
     if not isinstance(status, str) or status not in {'Published', 'Draft'}:
         return jsonify({'error': 'Job status must be Published or Draft.'}), 400
     required_skills = data.get('required_skills', [])
     eligible_departments = data.get('eligible_departments', [])
-    if not isinstance(required_skills, list) or not isinstance(eligible_departments, list):
+    if (
+        not isinstance(required_skills, list)
+        or not all(isinstance(value, str) and value.strip() for value in required_skills)
+        or not isinstance(eligible_departments, list)
+        or not all(isinstance(value, str) and value.strip() for value in eligible_departments)
+    ):
         return jsonify({'error': 'Required skills and eligible departments must be lists.'}), 400
     try:
         deadline = datetime.strptime(data['deadline'], '%Y-%m-%d') if data.get('deadline') else None
     except (TypeError, ValueError):
         return jsonify({'error': 'Deadline must use YYYY-MM-DD format.'}), 400
+    if status == 'Published' and deadline and deadline.date() < datetime.utcnow().date():
+        return jsonify({'error': 'A published requisition must have a current or future deadline.'}), 400
     company = user.recruiter_profile.company if user.recruiter_profile else None
+    company_name = data.get('company_name')
+    if company_name is not None and (not isinstance(company_name, str) or not company_name.strip()):
+        return jsonify({'error': 'Company name must be non-empty text.'}), 400
+    if company and company_name and company.name.casefold() != company_name.strip().casefold():
+        return jsonify({'error': 'Company name is assigned to the recruiter account and cannot be changed here.'}), 400
     if not company:
-        company = Company(name='Demo Company', industry='Technology')
+        if not company_name:
+            return jsonify({'error': 'Company name is required for the first requisition.'}), 400
+        company = Company(name=company_name.strip())
         db.session.add(company)
         db.session.flush()
         if not user.recruiter_profile:
@@ -68,12 +117,73 @@ def create_job():
     job = Job(
         company_id=company.id, recruiter_id=user.id, title=title.strip(), description=description.strip(),
         required_skills=required_skills, min_cgpa=min_cgpa, eligible_departments=eligible_departments,
-        graduation_year=data.get('graduation_year'), location=data.get('location'), work_mode=data.get('work_mode'), salary=data.get('salary'),
+        graduation_year=graduation_year, location=data.get('location'), work_mode=data.get('work_mode'), salary=data.get('salary'),
         deadline=deadline, openings=openings, status=status
     )
     db.session.add(job)
     db.session.commit()
     return jsonify({'message': 'Job created successfully.', 'job': make_serialized_job(job)}), 201
+
+
+@blueprint.route('/jobs/<int:job_id>', methods=['PATCH'])
+@jwt_required()
+def update_job(job_id):
+    user_id = int(get_jwt_identity())
+    user = User.query.get_or_404(user_id)
+    if user.role != 'recruiter':
+        return jsonify({'error': 'Only recruiters can manage job requisitions.'}), 403
+    job = Job.query.filter_by(id=job_id, recruiter_id=user.id).first_or_404()
+    data = request.get_json(silent=True) or {}
+
+    text_fields = ('title', 'description', 'location', 'work_mode', 'salary')
+    for field in text_fields:
+        if field in data:
+            if not isinstance(data[field], str) or (field in {'title', 'description'} and not data[field].strip()):
+                return jsonify({'error': f'{field.replace("_", " ").capitalize()} must be non-empty text.'}), 400
+            setattr(job, field, data[field].strip() or None)
+
+    if 'min_cgpa' in data:
+        try:
+            job.min_cgpa = float(data['min_cgpa'])
+        except (TypeError, ValueError):
+            return jsonify({'error': 'CGPA cutoff must be a number between 0 and 10.'}), 400
+        if not 0 <= job.min_cgpa <= 10:
+            return jsonify({'error': 'CGPA cutoff must be a number between 0 and 10.'}), 400
+    if 'openings' in data:
+        try:
+            job.openings = int(data['openings'])
+        except (TypeError, ValueError):
+            return jsonify({'error': 'Openings must be a positive whole number.'}), 400
+        if job.openings < 1:
+            return jsonify({'error': 'Openings must be a positive whole number.'}), 400
+    if 'graduation_year' in data:
+        try:
+            job.graduation_year = int(data['graduation_year']) if data['graduation_year'] not in (None, '') else None
+        except (TypeError, ValueError):
+            return jsonify({'error': 'Graduation year must be a valid year.'}), 400
+        if job.graduation_year is not None and not 1900 <= job.graduation_year <= 2200:
+            return jsonify({'error': 'Graduation year must be a valid year.'}), 400
+    for field in ('required_skills', 'eligible_departments'):
+        if field in data:
+            values = data[field]
+            if not isinstance(values, list) or not all(isinstance(value, str) and value.strip() for value in values):
+                return jsonify({'error': f'{field.replace("_", " ").capitalize()} must be a list of non-empty strings.'}), 400
+            setattr(job, field, [value.strip() for value in values])
+    if 'deadline' in data:
+        try:
+            job.deadline = datetime.strptime(data['deadline'], '%Y-%m-%d') if data['deadline'] else None
+        except (TypeError, ValueError):
+            return jsonify({'error': 'Deadline must use YYYY-MM-DD format.'}), 400
+    if 'status' in data:
+        if data['status'] not in {'Published', 'Draft', 'Closed', 'Archived'}:
+            return jsonify({'error': 'Status must be Draft, Published, Closed, or Archived.'}), 400
+        job.status = data['status']
+    if job.status == 'Published' and job.deadline and job.deadline.date() < datetime.utcnow().date():
+        return jsonify({'error': 'A published requisition must have a current or future deadline.'}), 400
+
+    db.session.commit()
+    return jsonify({'message': 'Job requisition updated.', 'job': make_serialized_job(job)})
+
 
 @blueprint.route('/jobs/<int:job_id>/eligibility', methods=['GET'])
 @jwt_required()
@@ -136,7 +246,12 @@ def submit_application():
         'graduation_year': job.graduation_year
     })
     if not eligibility['eligible']:
-        return jsonify({'error': 'You are not eligible for this job.', 'eligibility': eligibility}), 400
+        error = (
+            'Complete or correct your profile to verify the mandatory requirements.'
+            if eligibility['status'] == 'profile_required'
+            else 'You do not meet the mandatory requirements for this job.'
+        )
+        return jsonify({'error': error, 'eligibility': eligibility}), 400
     existing = Application.query.filter_by(student_id=user.id, job_id=job.id).first()
     if existing:
         return jsonify({'error': 'Duplicate application detected.'}), 409
@@ -282,4 +397,3 @@ def get_application_feedback(app_id):
     from backend.models import ApplicationFeedback
     feedbacks = ApplicationFeedback.query.filter_by(application_id=app.id).order_by(ApplicationFeedback.created_at.desc()).all()
     return jsonify({'feedbacks': [f.to_dict() for f in feedbacks]})
-
