@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Briefcase, PlusCircle, Save } from 'lucide-react';
 import Layout from '../components/Layout';
+import { useGlowHighlight } from '../utils/useGlowHighlight';
 
 const blankJob = {
   company_name: '',
@@ -10,6 +11,7 @@ const blankJob = {
   eligible_departments: '',
   min_cgpa: '',
   graduation_year: '',
+  graduation_year_mode: 'Only',
   location: '',
   work_mode: '',
   salary: '',
@@ -21,6 +23,7 @@ const blankJob = {
 const listValue = (value) => (value || []).join(', ');
 
 export default function RecruiterJobPostings() {
+  useGlowHighlight();
   const [jobs, setJobs] = useState([]);
   const [statistics, setStatistics] = useState({});
   const [form, setForm] = useState(blankJob);
@@ -72,6 +75,7 @@ export default function RecruiterJobPostings() {
       eligible_departments: listValue(job.eligible_departments),
       min_cgpa: job.min_cgpa ?? '',
       graduation_year: job.graduation_year ?? '',
+      graduation_year_mode: job.graduation_year_mode || 'Only',
       location: job.location || '',
       work_mode: job.work_mode || '',
       salary: job.salary || '',
@@ -94,6 +98,7 @@ export default function RecruiterJobPostings() {
       min_cgpa: form.min_cgpa === '' ? 0 : Number(form.min_cgpa),
       openings: Number(form.openings),
       graduation_year: form.graduation_year ? Number(form.graduation_year) : null,
+      graduation_year_mode: form.graduation_year_mode || 'Only',
       required_skills: form.required_skills.split(',').map((value) => value.trim()).filter(Boolean),
       eligible_departments: form.eligible_departments.split(',').map((value) => value.trim()).filter(Boolean)
     };
@@ -151,7 +156,7 @@ export default function RecruiterJobPostings() {
       {error && <p role="alert" className="mb-5 rounded-lg bg-ruby-50 border border-ruby-200 p-3 text-sm text-ruby-800">{error}</p>}
       {message && <p role="status" className="mb-5 rounded-lg bg-sage-50 border border-sage-200 p-3 text-sm text-forest-800">{message}</p>}
 
-      <div className="grid gap-8 xl:grid-cols-5">
+      <div id="requisitions" className="grid gap-8 xl:grid-cols-5">
         <form onSubmit={saveJob} className="xl:col-span-2 card p-6 bg-white border border-[#DFD9CC] shadow-soft space-y-4">
           <div className="flex items-center justify-between border-b border-[#ECE6D9] pb-3">
             <div className="flex items-center gap-2">
@@ -182,7 +187,13 @@ export default function RecruiterJobPostings() {
               <input className="input mt-1" type="number" min="0" max="10" step="0.01" value={form.min_cgpa} onChange={(event) => setForm({ ...form, min_cgpa: event.target.value })} />
             </label>
             <label className="block form-label">Graduation year
-              <input className="input mt-1" type="number" min="1900" max="2200" value={form.graduation_year} onChange={(event) => setForm({ ...form, graduation_year: event.target.value })} />
+              <input className="input mt-1" type="number" min="1900" max="2200" value={form.graduation_year} onChange={(event) => setForm({ ...form, graduation_year: event.target.value })} placeholder="e.g. 2026" />
+            </label>
+            <label className="block form-label">Graduation Year Eligibility Mode
+              <select className="input mt-1" value={form.graduation_year_mode} onChange={(event) => setForm({ ...form, graduation_year_mode: event.target.value })}>
+                <option value="Only">Only</option>
+                <option value="NA">NA</option>
+              </select>
             </label>
             <label className="block form-label">Location
               <input className="input mt-1" value={form.location} onChange={(event) => setForm({ ...form, location: event.target.value })} />
@@ -225,7 +236,11 @@ export default function RecruiterJobPostings() {
                   <div>
                     <h3 className="font-serif font-bold text-charcoal-900">{job.title}</h3>
                     <p className="mt-1 text-xs text-muted-600">{job.company_name} · {job.location || 'Location flexible'} · {job.openings} openings</p>
-                    <p className="mt-1 text-xs text-muted-600">{job.application_count || 0} applications · {job.min_cgpa ? `CGPA ${job.min_cgpa}+` : 'No CGPA cutoff'}{job.deadline ? ` · Deadline ${new Date(job.deadline).toLocaleDateString()}` : ''}</p>
+                    <p className="mt-1 text-xs text-muted-600">
+                      {job.application_count || 0} applications · {job.min_cgpa ? `CGPA ${job.min_cgpa}+` : 'No CGPA cutoff'}
+                      {job.graduation_year ? ` · Grad Year: ${job.graduation_year} (${job.graduation_year_mode || 'Only'})` : ''}
+                      {job.deadline ? ` · Deadline ${new Date(job.deadline).toLocaleDateString()}` : ''}
+                    </p>
                   </div>
                   <span className="badge badge-forest">{job.status}</span>
                 </div>

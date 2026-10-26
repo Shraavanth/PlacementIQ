@@ -38,7 +38,8 @@ def student_dashboard():
     for job in published_jobs:
         eligibility_result = compute_eligibility(student_data, {
             'min_cgpa': job.min_cgpa, 'eligible_departments': job.eligible_departments or [],
-            'required_skills': job.required_skills or [], 'graduation_year': job.graduation_year
+            'required_skills': job.required_skills or [], 'graduation_year': job.graduation_year,
+            'graduation_year_mode': getattr(job, 'graduation_year_mode', 'Only') or 'Only'
         })
         eligible = eligibility_result['eligible']
         eligible_count += int(eligible)
@@ -171,6 +172,7 @@ def recruiter_dashboard():
             'required_skills': j.required_skills or [],
             'eligible_departments': j.eligible_departments or [],
             'graduation_year': j.graduation_year,
+            'graduation_year_mode': getattr(j, 'graduation_year_mode', 'Only') or 'Only',
             'min_cgpa': j.min_cgpa,
             'status': j.status,
             'deadline': j.deadline.isoformat() if j.deadline else None,

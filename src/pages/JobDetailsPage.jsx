@@ -239,26 +239,39 @@ export default function JobDetailsPage() {
 
                     {job.eligible_departments?.length > 0 && (
                       <li className="flex items-center justify-between">
-                        <span>Target Departments: {job.eligible_departments.join(', ')}</span>
+                        <div>
+                          <span>Eligible Departments: {job.eligible_departments.join(', ')}</span>
+                          {eligibility?.mandatory_breakdown?.department?.actual && (
+                            <span className="block text-xs text-muted-500">Your department: {eligibility.mandatory_breakdown.department.actual}</span>
+                          )}
+                        </div>
                         {eligibility?.mandatory_breakdown?.department && (
                           eligibility.mandatory_breakdown.department.status === 'met'
-                            ? <span className="flex items-center gap-1 text-xs text-forest-700 font-semibold"><CheckCircle2 className="w-4 h-4" /> Met</span>
+                            ? <span className="flex items-center gap-1 text-xs text-forest-700 font-semibold"><CheckCircle2 className="w-4 h-4" /> Passed</span>
                             : eligibility.mandatory_breakdown.department.status === 'missing'
-                              ? <span className="flex items-center gap-1 text-xs text-amber-800 font-semibold"><AlertTriangle className="w-4 h-4" /> Add department</span>
-                              : <span className="flex items-center gap-1 text-xs text-ruby-600 font-semibold"><XCircle className="w-4 h-4" /> Different branch</span>
+                              ? <span className="flex items-center gap-1 text-xs text-amber-800 font-semibold"><AlertTriangle className="w-4 h-4" /> Add department to profile</span>
+                              : <span className="flex items-center gap-1 text-xs text-ruby-600 font-semibold"><XCircle className="w-4 h-4" /> Department mismatch</span>
                         )}
                       </li>
                     )}
 
                     {job.graduation_year && (
                       <li className="flex items-center justify-between">
-                        <span>Graduation Year: {job.graduation_year}</span>
+                        <div>
+                          <span>
+                            Graduation Year: {job.graduation_year}
+                            {job.graduation_year_mode === 'NA' ? ' or earlier (Mode: NA)' : ' (Mode: Only)'}
+                          </span>
+                          {eligibility?.mandatory_breakdown?.graduation_year?.actual && (
+                            <span className="block text-xs text-muted-500">Your graduation year: {eligibility.mandatory_breakdown.graduation_year.actual}</span>
+                          )}
+                        </div>
                         {eligibility?.mandatory_breakdown?.graduation_year && (
                           eligibility.mandatory_breakdown.graduation_year.status === 'met'
-                            ? <span className="flex items-center gap-1 text-xs text-forest-700 font-semibold"><CheckCircle2 className="w-4 h-4" /> Met</span>
+                            ? <span className="flex items-center gap-1 text-xs text-forest-700 font-semibold"><CheckCircle2 className="w-4 h-4" /> Passed</span>
                             : eligibility.mandatory_breakdown.graduation_year.status === 'missing'
-                              ? <span className="flex items-center gap-1 text-xs text-amber-800 font-semibold"><AlertTriangle className="w-4 h-4" /> Add year</span>
-                              : <span className="flex items-center gap-1 text-xs text-ruby-600 font-semibold"><XCircle className="w-4 h-4" /> Year mismatch</span>
+                              ? <span className="flex items-center gap-1 text-xs text-amber-800 font-semibold"><AlertTriangle className="w-4 h-4" /> Add graduation year</span>
+                              : <span className="flex items-center gap-1 text-xs text-ruby-600 font-semibold"><XCircle className="w-4 h-4" /> {job.graduation_year_mode === 'NA' ? `Must be ${job.graduation_year} or earlier` : `Year mismatch (Must be ${job.graduation_year})`}</span>
                         )}
                       </li>
                     )}
@@ -299,7 +312,7 @@ export default function JobDetailsPage() {
                     <div className="flex flex-wrap gap-1.5">
                       {job.required_skills && job.required_skills.length > 0 ? (
                         job.required_skills.map((s) => {
-                          const isMatched = eligibility?.matched_skills?.includes(s);
+                          const isMatched = eligibility?.matched_skills?.some(ms => ms.toLowerCase() === s.toLowerCase());
                           return (
                             <span 
                               key={s} 

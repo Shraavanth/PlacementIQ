@@ -101,6 +101,7 @@ class Job(db.Model):
     min_cgpa = db.Column(db.Float, default=0.0)
     eligible_departments = db.Column(db.JSON, default=list)
     graduation_year = db.Column(db.Integer)
+    graduation_year_mode = db.Column(db.String(10), default='Only')  # 'Only' or 'NA'
     experience_required = db.Column(db.String(50))
     location = db.Column(db.String(120))
     work_mode = db.Column(db.String(40))

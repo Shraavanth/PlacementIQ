@@ -9,16 +9,25 @@ from sqlalchemy.exc import SQLAlchemyError
 from backend.extensions import db
 from backend.models import Resume, User
 from backend.utils import extract_education_from_text, extract_skills_from_text
+try:
+    from backend.departments import normalize_department, DEPARTMENT_MAPPINGS
+except ImportError:
+    from departments import normalize_department, DEPARTMENT_MAPPINGS
 
 blueprint = Blueprint('resume', __name__, url_prefix='/api/resume')
 
 
 def extract_profile_fields(text):
+    if not text:
+        return {'needs_confirmation': {'department': True, 'graduation_year': True}}
+
     def labeled_value(label):
-        match = re.search(rf'(?im)^\s*{label}\s*[:\-]\s*(.+?)\s*$', text)
+        match = re.search(rf'(?im)^\s*{label}\s*[:\-]\s*(.+?)\s*(?:\||$)', text)
         return match.group(1).strip() if match else None
 
     fields = {}
+    needs_confirmation = {}
+
     name = labeled_value(r'(?:full\s+)?name')
     if name:
         parts = name.split()
@@ -33,33 +42,134 @@ def extract_profile_fields(text):
     if phone:
         fields['phone'] = phone.group(0).strip()
 
-    for label, field in (
-        (r'(?:university|institution|college)', 'university'),
-        (r'(?:degree|qualification)', 'degree'),
-        (r'(?:department|major|speciali[sz]ation)', 'department'),
-    ):
+    for label in (r'(?:university|institution|college)',):
         value = labeled_value(label)
         if value:
-            fields[field] = value
-    if 'degree' not in fields:
+            fields['university'] = value
+            break
+
+    degree_val = labeled_value(r'(?:degree|qualification)')
+    if degree_val:
+        fields['degree'] = degree_val
+    else:
         degrees = extract_education_from_text(text)
         if degrees:
             fields['degree'] = degrees[0]
 
+    # Target/preferred departments: must NOT be confused with actual academic department
+    target_depts = []
+    target_match = re.search(r'(?im)\b(?:target|preferred)\s+(?:departments?|branches?)\s*[:\-]\s*(.+?)\s*(?:\||\n|$)', text)
+    if target_match:
+        raw_targets = target_match.group(1)
+        for t in re.split(r'[,;/|]+', raw_targets):
+            t_clean = t.strip()
+            if t_clean:
+                target_depts.append(normalize_department(t_clean))
+        if target_depts:
+            fields['target_departments'] = target_depts
 
-    year = labeled_value(r'(?:graduation\s+year|year\s+of\s+graduation)')
-    if year:
-        match = re.search(r'\b(?:19|20|21)\d{2}\b', year)
-        if match:
-            fields['graduation_year'] = int(match.group(0))
+    # Actual Academic Department
+    dept_val = None
+    # 1. Search for explicit department label that is NOT target or preferred
+    dept_match = re.search(r'(?im)(?<!target\s)(?<!preferred\s)\b(?:academic\s+department|department|branch|major|speciali[sz]ation)\s*[:\-]\s*(.+?)\s*(?:\||\n|$)', text)
+    if dept_match:
+        cand = dept_match.group(1).strip()
+        if 'target' not in cand.lower() and 'preferred' not in cand.lower():
+            dept_val = cand
 
-    cgpa = labeled_value(r'(?:cgpa|gpa)')
-    if cgpa:
-        match = re.search(r'\b(?:10(?:\.0+)?|[0-9](?:\.\d{1,2})?)\b', cgpa)
-        if match:
-            value = float(match.group(0))
+    # 2. If no label, search in lines mentioning degree or education
+    if not dept_val:
+        edu_matches = re.finditer(r'(?im)^.*?\b(?:b\.?tech|b\.?e\.?|m\.?tech|bachelor|master|degree)\b.*$', text)
+        for em in edu_matches:
+            edu_line = em.group(0)
+            if any(k in edu_line.lower() for k in ['project', 'experience', 'internship', 'target']):
+                continue
+            for cand_alias, canonical in DEPARTMENT_MAPPINGS.items():
+                if len(cand_alias) > 3:
+                    if re.search(rf'\b{re.escape(cand_alias)}\b', edu_line, re.IGNORECASE):
+                        dept_val = canonical
+                        break
+            if dept_val:
+                break
+            for abbr in ['cse', 'ece', 'eee', 'it', 'mech', 'civil', 'aids', 'aiml']:
+                if re.search(rf'\b{abbr}\b', edu_line, re.IGNORECASE):
+                    dept_val = DEPARTMENT_MAPPINGS.get(abbr)
+                    break
+            if dept_val:
+                break
+
+    if dept_val:
+        normalized = normalize_department(dept_val)
+        fields['department'] = normalized
+        # Request confirmation if department is non-standard or multiple depts combined
+        if normalized not in DEPARTMENT_MAPPINGS.values() and (',' in dept_val or len(dept_val) > 40):
+            needs_confirmation['department'] = True
+        else:
+            needs_confirmation['department'] = False
+    else:
+        needs_confirmation['department'] = True
+
+    # Graduation Year: recognize Graduation Year, Year of Graduation, Passing Year, etc.
+    grad_year = None
+    # 1. Explicit label (handles Passing Year, Graduation Year, Year of Passing, etc.)
+    year_match = re.search(
+        r'(?im)\b(?:graduation\s+year|year\s+of\s+graduation|passing\s+year|year\s+of\s+passing|graduating\s+year|expected\s+graduation|batch\s+of|class\s+of)\s*[:\-]?\s*(?:(?:19|20|21)\d{2}\s*[-–/]\s*)?((?:19|20|21)\d{2})\b',
+        text
+    )
+    if year_match:
+        try:
+            cand = int(year_match.group(1))
+            if 1900 <= cand <= 2200:
+                grad_year = cand
+        except (ValueError, TypeError):
+            pass
+
+    # 2. Date range or single year beside degree/education details (avoiding project/job dates)
+    if not grad_year:
+        edu_matches = re.finditer(r'(?im)^.*?\b(?:b\.?tech|b\.?e\.?|m\.?tech|bachelor|master|degree|diploma)\b.*$', text)
+        for em in edu_matches:
+            line = em.group(0)
+            if any(k in line.lower() for k in ['project', 'experience', 'internship', 'published']):
+                continue
+            range_match = re.search(r'\b(?:19|20|21)\d{2}\s*[-–/to]+\s*((?:19|20|21)\d{2})\b', line, re.IGNORECASE)
+            if range_match:
+                cand = int(range_match.group(1))
+                if 1900 <= cand <= 2200:
+                    grad_year = cand
+                    break
+            single_year = re.search(r'\b((?:19|20|21)\d{2})\b', line)
+            if single_year:
+                cand = int(single_year.group(1))
+                if 1900 <= cand <= 2200:
+                    grad_year = cand
+                    break
+
+    # 3. PDF table row for Passing/Graduation Year
+    if not grad_year:
+        table_year = re.search(r'(?i)\b(?:passing\s+year|grad(?:uation)?\s+year)\s*\|?\s*((?:19|20|21)\d{2})\b', text)
+        if table_year:
+            try:
+                cand = int(table_year.group(1))
+                if 1900 <= cand <= 2200:
+                    grad_year = cand
+            except (ValueError, TypeError):
+                pass
+
+    if grad_year:
+        fields['graduation_year'] = grad_year
+        needs_confirmation['graduation_year'] = False
+    else:
+        needs_confirmation['graduation_year'] = True
+
+    # CGPA
+    cgpa_match = re.search(r'(?im)\b(?:cgpa|gpa)\s*[:\-]?\s*(\b(?:10(?:\.0+)?|[0-9](?:\.\d{1,2})?)\b)(?:\s*/\s*10(?:\.0+)?)?', text)
+    if cgpa_match:
+        try:
+            value = float(cgpa_match.group(1))
             if 0 <= value <= 10:
                 fields['cgpa'] = value
+        except (ValueError, TypeError):
+            pass
 
     links = sorted(set(re.findall(r'https?://[^\s<>]+', text, re.IGNORECASE)))
     if links:
@@ -99,6 +209,8 @@ def extract_profile_fields(text):
     skills = extract_skills_from_text(text)
     if skills:
         fields['skills'] = skills
+
+    fields['needs_confirmation'] = needs_confirmation
     return fields
 
 
@@ -118,7 +230,18 @@ def upload_resume():
         return jsonify({'error': 'Only PDF resumes are supported.'}), 400
     try:
         with fitz.open(stream=uploaded.read(), filetype='pdf') as doc:
-            text = '\n'.join(page.get_text('text') for page in doc)
+            text_parts = []
+            for page in doc:
+                try:
+                    tables = page.find_tables()
+                    for tab in tables:
+                        for row in tab.extract():
+                            row_str = " | ".join(str(cell or '') for cell in row)
+                            text_parts.append(row_str)
+                except Exception:
+                    pass
+                text_parts.append(page.get_text('text'))
+            text = '\n'.join(text_parts)
             page_count = len(doc)
     except (fitz.FileDataError, fitz.mupdf.FzErrorBase, ValueError):
         return jsonify({'error': 'The uploaded file is not a readable PDF.'}), 400

@@ -11,9 +11,11 @@ import {
   MessageSquare, 
   Send, 
   Clock,
-  Filter
+  Filter,
+  ArrowRight
 } from 'lucide-react';
 import Layout from '../components/Layout';
+import { useGlowHighlight } from '../utils/useGlowHighlight';
 
 const blankJob = { 
   title: '', 
@@ -26,11 +28,13 @@ const blankJob = {
   salary: '',
   openings: '1',
   graduation_year: '',
+  graduation_year_mode: 'Only',
   deadline: '',
   status: 'Published'
 };
 
 export default function RecruiterDashboard() {
+  const { triggerGlow } = useGlowHighlight();
   const [data, setData] = useState({ jobs: [], statistics: {} });
   const [applications, setApplications] = useState([]);
   const [form, setForm] = useState(blankJob);
@@ -85,6 +89,7 @@ export default function RecruiterDashboard() {
       min_cgpa: form.min_cgpa === '' ? 0 : Number(form.min_cgpa),
       openings: Number(form.openings),
       graduation_year: form.graduation_year ? Number(form.graduation_year) : null,
+      graduation_year_mode: form.graduation_year_mode || 'Only',
       required_skills: form.required_skills.split(',').map((value) => value.trim()).filter(Boolean),
       eligible_departments: form.eligible_departments.split(',').map((value) => value.trim()).filter(Boolean)
     };
@@ -169,19 +174,54 @@ export default function RecruiterDashboard() {
       </div>
 
       <section aria-label="Recruiter capabilities" className="mb-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <a href="/recruiter/jobs" className="card card-hover p-4 bg-white border border-[#DFD9CC]">
+        <Link 
+          to="/recruiter/jobs#requisitions" 
+          id="nav-manage-requisitions"
+          className="card card-hover p-4 bg-white border border-[#DFD9CC] block text-left"
+        >
+          <div className="flex items-center justify-between mb-2">
+            <Briefcase className="w-5 h-5 text-forest-800" />
+            <ArrowRight className="w-4 h-4 text-muted-400" />
+          </div>
           <h3 className="font-serif font-bold text-charcoal-900">Manage requisitions</h3>
           <p className="mt-1 text-xs leading-relaxed text-muted-600">Set role details, required skills, eligibility rules, openings, and application deadlines.</p>
-        </a>
-        <a href="#applicant-pipeline" className="card card-hover p-4 bg-white border border-[#DFD9CC]">
+        </Link>
+        <a 
+          href="#applicant-review" 
+          id="nav-review-applicants"
+          onClick={(e) => { e.preventDefault(); window.location.hash = 'applicant-review'; triggerGlow('applicant-review'); }}
+          className="card card-hover p-4 bg-white border border-[#DFD9CC] block text-left cursor-pointer"
+        >
+          <div className="flex items-center justify-between mb-2">
+            <Users className="w-5 h-5 text-forest-800" />
+            <ArrowRight className="w-4 h-4 text-muted-400" />
+          </div>
           <h3 className="font-serif font-bold text-charcoal-900">Review applicants</h3>
-          <p className="mt-1 text-xs leading-relaxed text-muted-600">See candidate profiles, academic details, skills, and applications for your jobs.</p>
+          <p className="mt-1 text-xs leading-relaxed text-muted-600">See candidate profiles, academic details, verified departments, and skills for your jobs.</p>
         </a>
-        <a href="#applicant-pipeline" className="card card-hover p-4 bg-white border border-[#DFD9CC]">
+        <a 
+          href="#candidate-pipeline" 
+          id="nav-move-candidates"
+          onClick={(e) => { e.preventDefault(); window.location.hash = 'candidate-pipeline'; triggerGlow('candidate-pipeline'); }}
+          className="card card-hover p-4 bg-white border border-[#DFD9CC] block text-left cursor-pointer"
+        >
+          <div className="flex items-center justify-between mb-2">
+            <Calendar className="w-5 h-5 text-forest-800" />
+            <ArrowRight className="w-4 h-4 text-muted-400" />
+          </div>
           <h3 className="font-serif font-bold text-charcoal-900">Move candidates forward</h3>
           <p className="mt-1 text-xs leading-relaxed text-muted-600">Update application stages and schedule interviews from the applicant pipeline.</p>
         </a>
-        <a href="#applicant-pipeline" className="card card-hover p-4 bg-white border border-[#DFD9CC]">
+        <a 
+          href="#candidate-feedback" 
+          id="nav-share-feedback"
+          onClick={(e) => { e.preventDefault(); window.location.hash = 'candidate-feedback'; triggerGlow('candidate-feedback'); }}
+          className="card card-hover p-4 bg-white border border-[#DFD9CC] block text-left cursor-pointer"
+        >
+          <div className="flex items-center justify-between mb-2">
+            <MessageSquare className="w-5 h-5 text-forest-800" />
+            <ArrowRight className="w-4 h-4 text-muted-400" />
+          </div>
           <h3 className="font-serif font-bold text-charcoal-900">Share useful feedback</h3>
           <p className="mt-1 text-xs leading-relaxed text-muted-600">Record strengths, skill gaps, and next steps candidates can use to improve.</p>
         </a>
@@ -435,30 +475,30 @@ export default function RecruiterDashboard() {
         </div>
       </div>
 
-      {/* Feature 6: Applicant Pipeline & Structured Feedback Loop */}
-      <div id="applicant-pipeline" className="mt-10 card p-6 sm:p-8 bg-white border border-[#DFD9CC] shadow-soft">
+      {/* Destination B: Review applicants */}
+      <section id="applicant-review" className="mt-10 card p-6 sm:p-8 bg-white border border-[#DFD9CC] shadow-soft">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-[#ECE6D9] mb-6">
           <div>
             <div className="flex items-center gap-2 mb-1">
               <Users className="w-5 h-5 text-forest-800" />
               <h3 className="text-xl font-serif font-bold text-charcoal-900">
-                Applicant Review & Recruiter Feedback Loop
+                Review Applicants & Profiles
               </h3>
             </div>
             <p className="text-xs text-muted-600">
-              Manage application progression and attach constructive feedback that automatically updates candidate roadmaps.
+              Evaluate applicant academic compliance, confirmed departments, graduation years, and technical skills.
             </p>
           </div>
           <span className="badge badge-sage text-xs">
-            {applications.length} Candidates in Pipeline
+            {applications.length} Candidates
           </span>
         </div>
 
         <div className="space-y-3">
           {applications.map((app) => (
             <div 
-              key={app.id} 
-              className="p-4 rounded-xl border border-[#DFD9CC] bg-white hover:border-forest-700 transition-colors flex flex-col md:flex-row md:items-center justify-between gap-4 text-xs"
+              key={`review-${app.id}`} 
+              className="p-4 rounded-xl border border-[#DFD9CC] bg-warm-50/30 flex flex-col md:flex-row md:items-center justify-between gap-4 text-xs"
             >
               <div>
                 <div className="flex items-center gap-2 mb-1">
@@ -466,12 +506,32 @@ export default function RecruiterDashboard() {
                   <span className="text-muted-500">({app.student_email})</span>
                   <span className="badge badge-forest capitalize">{app.status}</span>
                 </div>
-                <p className="text-muted-600">
-                  Applied for: <strong>{app.job_title}</strong> • Dept: {app.department || 'N/A'} • CGPA: {app.cgpa || 'N/A'}
+                <p className="text-muted-700">
+                  Applied for: <strong>{app.job_title}</strong>
                 </p>
-                {app.interview_date && (
-                  <p className="text-amber-800 font-semibold mt-1">
-                    📅 Interview: {new Date(app.interview_date).toLocaleString()}
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-muted-600">
+                  <span className="bg-white px-2 py-1 rounded border border-[#DFD9CC]">
+                    🎓 Academic Dept: <strong>{app.department || 'Not specified'}</strong>
+                  </span>
+                  <span className="bg-white px-2 py-1 rounded border border-[#DFD9CC]">
+                    📅 Grad Year: <strong>{app.graduation_year || 'Not specified'}</strong>
+                  </span>
+                  <span className="bg-white px-2 py-1 rounded border border-[#DFD9CC]">
+                    📊 CGPA: <strong>{app.cgpa ?? 'Not specified'}</strong>
+                  </span>
+                </div>
+                {app.skills && app.skills.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {app.skills.map((s) => (
+                      <span key={s} className="px-2 py-0.5 rounded bg-sage-50 text-forest-900 border border-sage-200 text-[10px]">
+                        {s}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {app.cover_note && (
+                  <p className="mt-2 italic text-muted-600 bg-white p-2 rounded border border-[#DFD9CC]">
+                    "{app.cover_note}"
                   </p>
                 )}
               </div>
@@ -483,7 +543,7 @@ export default function RecruiterDashboard() {
                   className="btn btn-secondary text-xs px-3.5 py-2 flex items-center gap-1.5"
                 >
                   <MessageSquare className="w-3.5 h-3.5" />
-                  Update Status & Feedback
+                  Evaluate Candidate
                 </button>
               </div>
             </div>
@@ -495,7 +555,158 @@ export default function RecruiterDashboard() {
             </p>
           )}
         </div>
-      </div>
+      </section>
+
+      {/* Destination C: Move candidates forward */}
+      <section id="candidate-pipeline" className="mt-8 card p-6 sm:p-8 bg-white border border-[#DFD9CC] shadow-soft">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-[#ECE6D9] mb-6">
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <Calendar className="w-5 h-5 text-forest-800" />
+              <h3 className="text-xl font-serif font-bold text-charcoal-900">
+                Move Candidates Forward — Application Pipeline
+              </h3>
+            </div>
+            <p className="text-xs text-muted-600">
+              Update application stages, schedule interviews, and guide candidate progression through hiring milestones.
+            </p>
+          </div>
+          <span className="badge badge-sage text-xs">
+            {applications.filter(a => ['Shortlisted', 'Interview', 'Hired'].includes(a.status)).length} Active Pipeline
+          </span>
+        </div>
+
+        <div className="space-y-3">
+          {applications.map((app) => (
+            <div 
+              key={`pipeline-${app.id}`} 
+              className="p-4 rounded-xl border border-[#DFD9CC] bg-white hover:border-forest-700 transition-colors flex flex-col md:flex-row md:items-center justify-between gap-4 text-xs"
+            >
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="font-serif font-bold text-sm text-charcoal-900">{app.student_name}</span>
+                  <span className="badge badge-forest capitalize">{app.status}</span>
+                </div>
+                <p className="text-muted-600">
+                  Role: <strong>{app.job_title}</strong> • Dept: {app.department || 'N/A'} • CGPA: {app.cgpa || 'N/A'}
+                </p>
+                {app.interview_date ? (
+                  <p className="text-amber-800 font-semibold mt-1 flex items-center gap-1">
+                    <Calendar className="w-3.5 h-3.5" /> Interview Scheduled: {new Date(app.interview_date).toLocaleString()}
+                  </p>
+                ) : (
+                  <p className="text-muted-400 mt-1 italic">
+                    No interview scheduled yet
+                  </p>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => { 
+                    setSelectedApp(app); 
+                    setNewStatus(app.status === 'Applied' ? 'Shortlisted' : app.status === 'Shortlisted' ? 'Interview' : app.status); 
+                  }}
+                  className="btn btn-primary text-xs px-3.5 py-2 flex items-center gap-1.5"
+                >
+                  <Calendar className="w-3.5 h-3.5" />
+                  Schedule Interview / Advance Stage
+                </button>
+              </div>
+            </div>
+          ))}
+
+          {applications.length === 0 && (
+            <p className="text-xs text-muted-500 italic py-8 text-center">
+              No candidates currently in the pipeline.
+            </p>
+          )}
+        </div>
+      </section>
+
+      {/* Destination D: Share useful feedback */}
+      <section id="candidate-feedback" className="mt-8 card p-6 sm:p-8 bg-white border border-[#DFD9CC] shadow-soft">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-[#ECE6D9] mb-6">
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <MessageSquare className="w-5 h-5 text-forest-800" />
+              <h3 className="text-xl font-serif font-bold text-charcoal-900">
+                Share Useful Feedback & Candidate Guidance
+              </h3>
+            </div>
+            <p className="text-xs text-muted-600">
+              Record candidate strengths, identified competency gaps, and actionable recommendations to guide student career development.
+            </p>
+          </div>
+          <span className="badge badge-sage text-xs">
+            Feedback & Growth Loop
+          </span>
+        </div>
+
+        <div className="space-y-4">
+          {applications.map((app) => {
+            const hasFeedbacks = app.feedbacks && app.feedbacks.length > 0;
+            return (
+              <div 
+                key={`feedback-${app.id}`} 
+                className="p-4 rounded-xl border border-[#DFD9CC] bg-warm-50/40 text-xs"
+              >
+                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 mb-2">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-serif font-bold text-sm text-charcoal-900">{app.student_name}</span>
+                      <span className="text-muted-500">({app.student_email})</span>
+                      <span className="badge badge-forest capitalize">{app.status}</span>
+                    </div>
+                    <p className="text-muted-600 mt-0.5">Application for: <strong>{app.job_title}</strong></p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => { setSelectedApp(app); setNewStatus(app.status); }}
+                    className="btn btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5 shrink-0"
+                  >
+                    <MessageSquare className="w-3.5 h-3.5" />
+                    {hasFeedbacks ? 'Add More Feedback' : 'Record Constructive Feedback'}
+                  </button>
+                </div>
+
+                {hasFeedbacks ? (
+                  <div className="mt-3 space-y-2 border-t border-[#ECE6D9] pt-2">
+                    {app.feedbacks.map((fb, idx) => (
+                      <div key={idx} className="bg-white p-3 rounded-lg border border-[#DFD9CC] space-y-1">
+                        <div className="flex justify-between items-center text-[11px] text-muted-500">
+                          <span className="font-semibold text-charcoal-800">Stage: {fb.stage || app.status}</span>
+                          {fb.created_at && <span>{new Date(fb.created_at).toLocaleDateString()}</span>}
+                        </div>
+                        {fb.strengths && (
+                          <p className="text-forest-800"><strong>Strengths:</strong> {fb.strengths}</p>
+                        )}
+                        {fb.gaps && (
+                          <p className="text-amber-800"><strong>Skill Gaps:</strong> {fb.gaps}</p>
+                        )}
+                        {fb.recommendations && (
+                          <p className="text-charcoal-700"><strong>Recommendations:</strong> {fb.recommendations}</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-2 text-muted-500 italic">
+                    No structured feedback recorded yet for this candidate. Click "Record Constructive Feedback" to help guide their preparation.
+                  </p>
+                )}
+              </div>
+            );
+          })}
+
+          {applications.length === 0 && (
+            <p className="text-xs text-muted-500 italic py-8 text-center">
+              No candidates available to provide feedback.
+            </p>
+          )}
+        </div>
+      </section>
 
       {/* Structured Feedback Modal / Form */}
       {selectedApp && (
