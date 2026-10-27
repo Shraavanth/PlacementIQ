@@ -36,7 +36,8 @@ def create_app(test_config=None):
         # Add optional columns to existing tables if missing in SQLite
         for statement in [
             "ALTER TABLE notifications ADD COLUMN link VARCHAR(250)",
-            "ALTER TABLE applications ADD COLUMN interview_date DATETIME"
+            "ALTER TABLE applications ADD COLUMN interview_date DATETIME",
+            "ALTER TABLE jobs ADD COLUMN graduation_year_mode VARCHAR(10) DEFAULT 'Only'"
         ]:
             try:
                 with db.engine.connect() as conn:

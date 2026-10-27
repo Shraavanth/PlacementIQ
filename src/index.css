@@ -149,3 +149,18 @@ body {
   font-family: 'Newsreader', Georgia, serif;
 }
 
+/* Deep-Green / Emerald Glow Effect for Card Navigation */
+.glow-highlight {
+  border-color: #214C3A !important;
+  box-shadow: 0 0 0 3px rgba(33, 76, 58, 0.4), 0 0 25px 4px rgba(33, 76, 58, 0.35) !important;
+  background-color: rgba(33, 76, 58, 0.04) !important;
+  transition: box-shadow 0.3s ease, border-color 0.3s ease, background-color 0.3s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .glow-highlight {
+    transition: none !important;
+  }
+}
+
+

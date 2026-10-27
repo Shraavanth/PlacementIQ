@@ -3,6 +3,10 @@ from flask_jwt_extended import get_jwt_identity, jwt_required
 from backend.extensions import db
 from backend.models import AuditLog, StudentProfile, User
 from backend.utils import normalize_cgpa
+try:
+    from backend.departments import normalize_department
+except ImportError:
+    from departments import normalize_department
 from urllib.parse import urlparse
 
 blueprint = Blueprint('student', __name__, url_prefix='/api/student')
@@ -112,8 +116,18 @@ def apply_resume_autofill():
         if field in {'skills', 'certifications', 'projects', 'internships'}:
             if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
                 return jsonify({'error': f'{field.capitalize()} must be a list of strings.'}), 400
+        elif field == 'department':
+            if sources.get('department') == 'manual' and profile.department:
+                preserved_fields.append(field)
+                continue
+            if not isinstance(value, str):
+                return jsonify({'error': 'Department must be text.'}), 400
+            value = normalize_department(value)
         elif field in {'graduation_year', 'cgpa'}:
             if field == 'cgpa' and profile.cgpa is not None:
+                preserved_fields.append(field)
+                continue
+            if field == 'graduation_year' and sources.get('graduation_year') == 'manual' and profile.graduation_year is not None:
                 preserved_fields.append(field)
                 continue
             if field == 'cgpa':
@@ -133,7 +147,7 @@ def apply_resume_autofill():
     db.session.commit()
     message = 'Selected resume information applied.'
     if preserved_fields:
-        message += ' Existing profile CGPA was preserved; edit it in your profile if you intend to change it.'
+        message += f' Existing verified profile information ({", ".join(preserved_fields)}) was preserved; edit it in your profile if you intend to change it.'
     return jsonify({'message': message, 'profile': profile.to_dict(), 'preserved_fields': preserved_fields})
 
 

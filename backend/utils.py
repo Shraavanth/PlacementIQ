@@ -2,6 +2,12 @@ import re
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
+try:
+    from backend.departments import normalize_department, departments_match, student_matches_any_department
+except ImportError:
+    from departments import normalize_department, departments_match, student_matches_any_department
+
+
 SKILL_MAP = {
     'python': 'Python',
     'sql': 'SQL',
@@ -104,17 +110,18 @@ def compute_eligibility(student_profile, job):
         cgpa_status = 'met'
         criteria_met.append('Minimum CGPA')
 
-    eligible_departments = {str(department).casefold() for department in job.get('eligible_departments') or []}
+    raw_eligible_departments = job.get('eligible_departments') or []
     dept = student_profile.get('department')
     dept_status = 'not_required'
-    if eligible_departments:
+    if raw_eligible_departments:
         if not dept:
             missing_data.append('department')
             criteria_missing.append('Eligible department')
             reasons.append('Department is missing in your profile.')
             dept_status = 'missing'
-        elif str(dept).casefold() not in eligible_departments:
-            reasons.append('Department does not match required eligible departments.')
+        elif not student_matches_any_department(dept, raw_eligible_departments):
+            norm_dept = normalize_department(dept)
+            reasons.append(f'Department ({norm_dept}) does not match required eligible departments.')
             criteria_missing.append('Eligible department')
             dept_status = 'unmet'
         else:
@@ -127,20 +134,47 @@ def compute_eligibility(student_profile, job):
     missing_skills = [s for s in required_skills if str(s).casefold() not in student_skills]
 
     required_graduation_year = job.get('graduation_year')
+    grad_mode = job.get('graduation_year_mode') or 'Only'
     student_graduation_year = student_profile.get('graduation_year')
     grad_status = 'not_required'
-    if required_graduation_year:
+    if required_graduation_year is not None and str(required_graduation_year).strip() != '':
+        try:
+            req_grad_int = int(required_graduation_year)
+        except (ValueError, TypeError):
+            req_grad_int = None
+
         if not student_graduation_year:
             missing_data.append('graduation_year')
             criteria_missing.append('Graduation year')
             reasons.append('Graduation year is missing for the job requirement.')
             grad_status = 'missing'
-        elif int(student_graduation_year) != int(required_graduation_year):
-            criteria_missing.append('Graduation year')
-            reasons.append(f'Graduation year must be {required_graduation_year}.')
-            grad_status = 'unmet'
         else:
-            criteria_met.append('Graduation year')
+            try:
+                stu_grad_int = int(student_graduation_year)
+            except (ValueError, TypeError):
+                stu_grad_int = None
+
+            if stu_grad_int is None or req_grad_int is None:
+                missing_data.append('graduation_year')
+                criteria_missing.append('Graduation year')
+                reasons.append('Valid graduation year is required.')
+                grad_status = 'missing'
+            elif grad_mode == 'NA':
+                if stu_grad_int <= req_grad_int:
+                    criteria_met.append('Graduation year')
+                    grad_status = 'met'
+                else:
+                    criteria_missing.append('Graduation year')
+                    reasons.append(f'Graduation year must be {req_grad_int} or earlier.')
+                    grad_status = 'unmet'
+            else:  # 'Only'
+                if stu_grad_int == req_grad_int:
+                    criteria_met.append('Graduation year')
+                    grad_status = 'met'
+                else:
+                    criteria_missing.append('Graduation year')
+                    reasons.append(f'Graduation year must be {req_grad_int}.')
+                    grad_status = 'unmet'
     else:
         criteria_met.append('Graduation year')
         grad_status = 'met'
@@ -188,12 +222,14 @@ def compute_eligibility(student_profile, job):
             'status': cgpa_status
         },
         'department': {
-            'required': job.get('eligible_departments') or ['Any'],
-            'actual': dept,
+            'required': [normalize_department(d) for d in raw_eligible_departments] if raw_eligible_departments else ['Any'],
+            'actual': normalize_department(dept) if dept else None,
+            'raw_actual': dept,
             'status': dept_status
         },
         'graduation_year': {
             'required': required_graduation_year,
+            'mode': grad_mode,
             'actual': student_graduation_year,
             'status': grad_status
         },
@@ -267,6 +303,7 @@ def make_serialized_job(job):
         'required_skills': job.required_skills or [],
         'eligible_departments': job.eligible_departments or [],
         'graduation_year': job.graduation_year,
+        'graduation_year_mode': getattr(job, 'graduation_year_mode', 'Only') or 'Only',
         'min_cgpa': job.min_cgpa,
         'openings': job.openings,
         'work_mode': job.work_mode,

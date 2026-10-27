@@ -34,6 +34,7 @@ def list_jobs():
                 'eligible_departments': job.eligible_departments or [],
                 'required_skills': job.required_skills or [],
                 'graduation_year': job.graduation_year,
+                'graduation_year_mode': getattr(job, 'graduation_year_mode', 'Only') or 'Only',
                 'title': job.title,
                 'location': job.location
             })
@@ -79,6 +80,9 @@ def create_job():
             return jsonify({'error': 'Graduation year must be a valid year.'}), 400
     else:
         graduation_year = None
+    graduation_year_mode = data.get('graduation_year_mode', 'Only') or 'Only'
+    if graduation_year_mode not in {'Only', 'NA'}:
+        return jsonify({'error': 'Graduation year eligibility mode must be "Only" or "NA".'}), 400
     status = data.get('status', 'Published')
     if not isinstance(status, str) or status not in {'Published', 'Draft'}:
         return jsonify({'error': 'Job status must be Published or Draft.'}), 400
@@ -117,7 +121,7 @@ def create_job():
     job = Job(
         company_id=company.id, recruiter_id=user.id, title=title.strip(), description=description.strip(),
         required_skills=required_skills, min_cgpa=min_cgpa, eligible_departments=eligible_departments,
-        graduation_year=graduation_year, location=data.get('location'), work_mode=data.get('work_mode'), salary=data.get('salary'),
+        graduation_year=graduation_year, graduation_year_mode=graduation_year_mode, location=data.get('location'), work_mode=data.get('work_mode'), salary=data.get('salary'),
         deadline=deadline, openings=openings, status=status
     )
     db.session.add(job)
@@ -163,6 +167,11 @@ def update_job(job_id):
             return jsonify({'error': 'Graduation year must be a valid year.'}), 400
         if job.graduation_year is not None and not 1900 <= job.graduation_year <= 2200:
             return jsonify({'error': 'Graduation year must be a valid year.'}), 400
+    if 'graduation_year_mode' in data:
+        mode = data['graduation_year_mode']
+        if mode not in {'Only', 'NA'}:
+            return jsonify({'error': 'Graduation year eligibility mode must be "Only" or "NA".'}), 400
+        job.graduation_year_mode = mode
     for field in ('required_skills', 'eligible_departments'):
         if field in data:
             values = data[field]
@@ -204,7 +213,8 @@ def job_eligibility(job_id):
     }
     result = compute_eligibility(student_data, {
         'min_cgpa': job.min_cgpa, 'eligible_departments': job.eligible_departments or [], 'required_skills': job.required_skills or [],
-        'graduation_year': job.graduation_year
+        'graduation_year': job.graduation_year,
+        'graduation_year_mode': getattr(job, 'graduation_year_mode', 'Only') or 'Only'
     })
     result['match_score'] = compute_match_score(student_data, {'required_skills': job.required_skills or [], 'title': job.title, 'location': job.location})
 
@@ -243,7 +253,8 @@ def submit_application():
         'min_cgpa': job.min_cgpa,
         'eligible_departments': job.eligible_departments or [],
         'required_skills': job.required_skills or [],
-        'graduation_year': job.graduation_year
+        'graduation_year': job.graduation_year,
+        'graduation_year_mode': getattr(job, 'graduation_year_mode', 'Only') or 'Only'
     })
     if not eligibility['eligible']:
         error = (
